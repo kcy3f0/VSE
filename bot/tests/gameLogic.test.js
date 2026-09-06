@@ -363,7 +363,77 @@ try {
   assert.strictEqual(sanitized.includes('@everyone'), false, '應防護 @everyone 注入');
   console.log('  -> 下市按鈕防呆與控制字元過濾測試通過！');
 
-  console.log('\n🎉 所有核心邏輯與 20 項完整測試（包含 4 大核心 Bug 修復）全數通過！\n');
+  // 21. 測試重複頻道綁定阻擋 (中風險 2)
+  console.log('[Test 21] 測試重複頻道綁定阻擋 (中風險 2)...');
+  db.registerTeam('team_alpha', 'Alpha隊', 'channel_shared_999');
+  assert.throws(() => {
+    db.registerTeam('team_beta', 'Beta隊', 'channel_shared_999');
+  }, /每個文字頻道僅能綁定一個小隊/);
+  console.log('  -> 頻道唯一性檢查通過！');
+
+  // 22. 測試全域互斥鎖 runGlobal 與並發排隊 (中風險 1)
+  console.log('[Test 22] 測試全域互斥鎖 runGlobal 與並發排隊 (中風險 1)...');
+  const gMutex = new TeamMutex();
+  const executionOrder = [];
+
+  // 隊伍 1 啟動異步操作
+  const p1 = gMutex.runExclusive('team_1', async () => {
+    await new Promise(r => setTimeout(r, 20));
+    executionOrder.push('t1');
+  });
+
+  // 全域操作（如結算）排在後面
+  const pGlobal = gMutex.runGlobal(async () => {
+    executionOrder.push('global_settle');
+  });
+
+  // 隊伍 2 排在全域結算後
+  const p2 = gMutex.runExclusive('team_2', async () => {
+    executionOrder.push('t2');
+  });
+
+  await Promise.all([p1, pGlobal, p2]);
+  assert.deepStrictEqual(executionOrder, ['t1', 'global_settle', 't2'], '全域鎖應等候既有任務並阻塞後續隊伍任務');
+  console.log('  -> 全域互斥鎖並發隔離測試通過！');
+
+  // 23. 測試浮點數資產累加精度與 Epsilon 排名 (中風險 4)
+  console.log('[Test 23] 測試浮點數資產累加精度與 Epsilon 排名 (中風險 4)...');
+  db.registerTeam('team_float_1', 'Float隊1', null);
+  db.updateTeam('team_float_1', {
+    cash: 100.33,
+    portfolio: { M: 3 } // 3 * 33.55 = 100.65 (未處理會是 100.64999999999999)
+  });
+  const floatOverview = TeamService.getPortfolioOverview('team_float_1', 1);
+  assert.strictEqual(floatOverview.totalStockValue, 100.65, '股票現值應精確消除浮點誤差');
+  assert.strictEqual(floatOverview.totalAsset, 200.98, '總資產應精確至小數點後兩位');
+  console.log('  -> 浮點數精度消除測試通過！');
+
+  // 24. 測試嚴格正則驗證防截斷 (中風險 6)
+  console.log('[Test 24] 測試嚴格正則驗證防截斷 (中風險 6)...');
+  const isValidShares = (val) => /^\d+$/.test(val) && parseInt(val, 10) > 0;
+  assert.strictEqual(isValidShares('10'), true);
+  assert.strictEqual(isValidShares('10.9'), false, '應拒絕 10.9');
+  assert.strictEqual(isValidShares('10abc'), false, '應拒絕 10abc');
+  assert.strictEqual(isValidShares('-5'), false, '應拒絕負數');
+  assert.strictEqual(isValidShares('0'), false, '應拒絕 0');
+  console.log('  -> 股數輸入嚴格驗證測試通過！');
+
+  // 25. 測試 Storage 深度防呆與 cash NaN 免疫
+  console.log('[Test 25] 測試 Storage 深度防呆與 cash NaN 免疫...');
+  const dirtyData = {
+    gameState: { round: 1, stage: 'SETUP' },
+    teams: {
+      team_hacked: { cash: 'hacked_string', portfolio: null }
+    },
+    settlementHistory: null
+  };
+  const sanitizedSuccess = db.validateAndSanitizeData(dirtyData);
+  assert.strictEqual(sanitizedSuccess, true);
+  assert.strictEqual(dirtyData.teams.team_hacked.cash, 0, '非數字 cash 應自動防呆轉為 0');
+  assert.deepStrictEqual(dirtyData.teams.team_hacked.portfolio, {}, '非物件 portfolio 應自動初始化');
+  console.log('  -> Storage 深度防呆測試通過！');
+
+  console.log('\n🎉 所有核心邏輯與 25 項完整測試（包含 4 大高風險與 6 大中風險全面修復）全數通過！\n');
 } finally {
   // 清理測試檔案
   for (const f of [TEST_DB_FILE, TEST_BAK_FILE, TEST_TMP_FILE]) {

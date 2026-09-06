@@ -194,7 +194,7 @@ graph TD
 | 指令 | 說明 | 參數 | 範例 |
 | :--- | :--- | :--- | :--- |
 | `/gm panel` | 召喚關主總控台面板 | 無 | `/gm panel` |
-| `/gm setup` | 初始化小隊名單與初始本金 | `team_count` (隊伍數, 必填)<br>`initial_cash` (起始本金, 選填) | `/gm setup team_count:8 initial_cash:100000` |
+| `/gm setup` | 初始化小隊名單與初始本金 | `team_count` (隊伍數, 必填)<br>`confirm:true` (二次確認, 必填)<br>`initial_cash` (起始本金, 選填) | `/gm setup team_count:8 confirm:true initial_cash:100000` |
 | `/gm bind` | 綁定小隊代號至特定文字頻道 | `team_id` (必填)<br>`channel` (頻道, 必填)<br>`name` (小隊名, 選填) | `/gm bind team_id:team_1 channel:#隊伍1 name:第一小隊` |
 | `/gm round` | 切換當前回合階段 | `stage` (`quiz` / `trading` / `settle`) | `/gm round stage:trading` |
 | `/gm give_cash` | 發放解題獎勵資金給小隊 | `team_id` (必填)<br>`amount` (金額, 必填)<br>`reason` (事由, 選填) | `/gm give_cash team_id:team_1 amount:20000 reason:第一關滿分` |

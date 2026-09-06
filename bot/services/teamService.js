@@ -129,8 +129,8 @@ export class TeamService {
       if (!stock) continue;
 
       const price = stock.prices[round] ?? 0;
-      const value = price * shares;
-      totalStockValue += value;
+      const value = roundCurrency(price * shares);
+      totalStockValue = roundCurrency(totalStockValue + value);
 
       holdings.push({
         stockId,
@@ -143,7 +143,7 @@ export class TeamService {
       });
     }
 
-    const totalAsset = team.cash + totalStockValue;
+    const totalAsset = roundCurrency(team.cash + totalStockValue);
 
     return {
       teamId: team.id,

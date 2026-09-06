@@ -1,4 +1,4 @@
-import { SlashCommandBuilder, PermissionFlagsBits, EmbedBuilder } from 'discord.js';
+import { SlashCommandBuilder, PermissionFlagsBits, EmbedBuilder, ChannelType } from 'discord.js';
 import { db } from '../database/storage.js';
 import { STOCKS, TOTAL_ROUNDS } from '../config/marketData.js';
 import { GameEngine } from '../services/gameEngine.js';
@@ -26,6 +26,11 @@ export const adminSlashCommands = [
             .setMinValue(1)
             .setMaxValue(20)
         )
+        .addBooleanOption(opt =>
+          opt.setName('confirm')
+            .setDescription('確定重設並初始化嗎？此動作不可逆！')
+            .setRequired(true)
+        )
         .addIntegerOption(opt =>
           opt.setName('initial_cash')
             .setDescription('起始本金 (預設 100,000)')
@@ -44,6 +49,7 @@ export const adminSlashCommands = [
         .addChannelOption(opt =>
           opt.setName('channel')
             .setDescription('專屬文字頻道')
+            .addChannelTypes(ChannelType.GuildText)
             .setRequired(true)
         )
         .addStringOption(opt =>
@@ -130,6 +136,14 @@ export const adminSlashCommands = [
 
 // 處理關主指令
 export async function handleAdminCommand(interaction, client) {
+  // 嚴格權限防護 (H1)
+  if (!interaction.memberPermissions?.has(PermissionFlagsBits.Administrator)) {
+    return interaction.reply({
+      content: '❌ 權限不足：僅有伺服器管理員/關主可執行此指令！',
+      ephemeral: true
+    });
+  }
+
   const subcommand = interaction.options.getSubcommand();
 
   if (subcommand === 'panel') {
@@ -138,6 +152,14 @@ export async function handleAdminCommand(interaction, client) {
   }
 
   if (subcommand === 'setup') {
+    const confirm = interaction.options.getBoolean('confirm');
+    if (!confirm) {
+      return interaction.reply({
+        content: '⚠️ 操作已取消：必須確認 `confirm: true` 才能進行重設與初始化小隊！',
+        ephemeral: true
+      });
+    }
+
     const count = interaction.options.getInteger('team_count');
     const cash = interaction.options.getInteger('initial_cash') ?? 100000;
 
@@ -155,16 +177,23 @@ export async function handleAdminCommand(interaction, client) {
   }
 
   if (subcommand === 'bind') {
-    const teamId = interaction.options.getString('team_id');
+    const teamId = interaction.options.getString('team_id').trim();
     const channel = interaction.options.getChannel('channel');
     const rawCustomName = interaction.options.getString('name');
     const customName = rawCustomName ? sanitizeText(rawCustomName, 50) : null;
 
-    const team = db.registerTeam(teamId, customName, channel.id);
-    return interaction.reply({
-      content: `✅ 成功將 **${team.name}** (${team.id}) 綁定至文字頻道 <#${channel.id}>！`,
-      allowedMentions: { parse: [] }
-    });
+    try {
+      const team = db.registerTeam(teamId, customName, channel.id);
+      return interaction.reply({
+        content: `✅ 成功將 **${team.name}** (${team.id}) 綁定至文字頻道 <#${channel.id}>！`,
+        allowedMentions: { parse: [] }
+      });
+    } catch (err) {
+      return interaction.reply({
+        content: `❌ 綁定失敗：${err.message}`,
+        ephemeral: true
+      });
+    }
   }
 
   if (subcommand === 'round') {
@@ -252,7 +281,9 @@ export async function handleAdminCommand(interaction, client) {
       await interaction.deferReply();
 
       try {
-        const settleResult = GameEngine.settleRound();
+        const settleResult = await teamMutex.runGlobal(async () => {
+          return GameEngine.settleRound();
+        });
         const { round, isLastRound, settlementData } = settleResult;
 
         // 向各小隊專屬頻道發送私密結算單

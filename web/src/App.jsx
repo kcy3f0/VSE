@@ -144,7 +144,7 @@ export default function App() {
   const [db, setDb]           = useState(null);
   const [loading, setLoading] = useState(true);
   const [gameState, setGameState] = useState({
-    currentRound: 1, marketOpen: false, adminPassword: 'campadmin',
+    currentRound: 1, marketOpen: false, adminPassword: '',
     defaultCash: 20000, autoTick: false, inflationRate: 2, feeRate: 0.01,
     hasOpenedBefore: false, basePrices: {}, previousRanks: {}, news: []
   });

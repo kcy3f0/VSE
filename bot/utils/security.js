@@ -40,6 +40,7 @@ export function sanitizeText(text, maxLength = 200) {
 export class TeamMutex {
   constructor() {
     this.queues = new Map();
+    this.globalBarrier = Promise.resolve();
   }
 
   /**
@@ -48,6 +49,7 @@ export class TeamMutex {
    * @param {Function} fn 
    */
   async runExclusive(teamId, fn) {
+    const globalWait = this.globalBarrier;
     const prev = this.queues.get(teamId) || Promise.resolve();
     let release;
     const current = new Promise(resolve => {
@@ -57,6 +59,7 @@ export class TeamMutex {
     this.queues.set(teamId, current);
 
     try {
+      await globalWait.catch(() => {});
       await prev.catch(() => {});
       return await fn();
     } finally {
@@ -64,6 +67,30 @@ export class TeamMutex {
       if (this.queues.get(teamId) === current) {
         this.queues.delete(teamId);
       }
+    }
+  }
+
+  /**
+   * 全域互斥鎖：鎖定全場所有小隊佇列（用於回合結算、資料庫重設等重大全域操作）
+   * @param {Function} fn 
+   */
+  async runGlobal(fn) {
+    const existingQueues = Array.from(this.queues.values());
+    const prevGlobal = this.globalBarrier;
+
+    let release;
+    const currentGlobal = new Promise(resolve => {
+      release = resolve;
+    });
+
+    this.globalBarrier = currentGlobal;
+
+    try {
+      await prevGlobal.catch(() => {});
+      await Promise.all(existingQueues.map(p => p.catch(() => {})));
+      return await fn();
+    } finally {
+      release();
     }
   }
 }

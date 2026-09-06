@@ -21,9 +21,15 @@ const client = new Client({
 });
 
 client.once('ready', () => {
+  const gameState = db.getGameState();
   console.log(`========================================`);
   console.log(`🤖 股市模擬機器人已上線！登入身分：${client.user.tag}`);
-  console.log(`目前遊戲狀態：第 ${db.getGameState().round} 期 | 階段：${db.getGameState().stage}`);
+  console.log(`目前遊戲狀態：第 ${gameState.round} 期 | 階段：${gameState.stage}`);
+
+  // 開機健全檢查：若處於 TRADING 但時間已過期，印出警示 (中風險 3)
+  if (gameState.stage === 'TRADING' && gameState.tradingEndsAt && Date.now() > gameState.tradingEndsAt) {
+    console.warn(`⚠️ [GameEngine] 偵測到第 ${gameState.round} 期 5 分鐘投資時間已逾期截止，市場關閉等候關主結算。`);
+  }
   console.log(`========================================`);
 });
 
@@ -59,7 +65,7 @@ function checkTeamChannel(interaction, teamId) {
   }
   if (team.channelId !== interaction.channelId) {
     interaction.reply({
-      content: `❌ 操作被拒絕：您只能在 **${team.name}** 的專屬文字頻道 (<#${team.channelId}>) 進行交易或查看情報！`,
+      content: `❌ 操作被拒絕：此操作僅限於 **${team.name}** 的專屬頻道 (<#${team.channelId}>) 中執行！`,
       ephemeral: true
     }).catch(() => {});
     return null;
@@ -73,6 +79,7 @@ client.on('interactionCreate', async (interaction) => {
     // 1. 斜線指令 (Slash Commands)
     if (interaction.isChatInputCommand()) {
       if (interaction.commandName === 'gm') {
+        if (!checkAdminPermission(interaction)) return;
         return await handleAdminCommand(interaction, client);
       } else {
         return await handlePlayerCommand(interaction);
@@ -134,10 +141,16 @@ client.on('interactionCreate', async (interaction) => {
             ephemeral: true
           });
         }
+        // 防範 Embed description 突破 Discord 4096 字元上限 (中風險 5)
+        let fullContent = hints.map(h => `**【第 ${h.round} 期 • ${h.stockName}】**\n${h.content}`).join('\n\n');
+        if (fullContent.length > 3800) {
+          fullContent = fullContent.substring(0, 3800) + '\n\n...（情報字數過長，其餘內容已省略，請洽關主查閱）';
+        }
+
         const embed = new EmbedBuilder()
-          .setTitle(`💡 ${team.name} 已解鎖情報庫`)
+          .setTitle(`💡 ${team.name} 已解鎖情報庫 (共 ${hints.length} 條)`)
           .setColor(0xf39c12)
-          .setDescription(hints.map(h => `**【第 ${h.round} 期 • ${h.stockName}】**\n${h.content}`).join('\n\n'));
+          .setDescription(fullContent);
         return interaction.reply({ embeds: [embed], ephemeral: true });
       }
 
@@ -226,32 +239,40 @@ client.on('interactionCreate', async (interaction) => {
         // 延遲響應防止多隊戰報發送逾時 (H3 防護)
         await interaction.deferReply({ ephemeral: true });
 
-        const settleResult = GameEngine.settleRound();
-        const { round, isLastRound, settlementData } = settleResult;
+        try {
+          // 使用全域互斥鎖，阻斷結算與交易之並發競態 (中風險 1)
+          const settleResult = await teamMutex.runGlobal(async () => {
+            return GameEngine.settleRound();
+          });
+          const { round, isLastRound, settlementData } = settleResult;
 
-        for (const item of settlementData.rankings) {
-          if (item.channelId) {
-            const ch = await client.channels.fetch(item.channelId).catch(() => null);
-            if (ch) {
-              const embed = new EmbedBuilder()
-                .setTitle(`🏁 【第 ${round} 期結算戰報】${item.teamName}`)
-                .setColor(0xf1c40f)
-                .addFields(
-                  { name: '💰 結算現金', value: `$${item.cash.toLocaleString()}`, inline: true },
-                  { name: '📈 股票庫存市值', value: `$${item.stockValue.toLocaleString()}`, inline: true },
-                  { name: '🏦 總資產', value: `**$${item.totalAsset.toLocaleString()}**`, inline: true },
-                  { name: '🏆 當輪排名', value: `第 **${item.rank}** 名 (共 ${settlementData.totalTeams} 隊)`, inline: false }
-                )
-                .setFooter({ text: '依規則：其餘各隊詳細資產不公開。' })
-                .setTimestamp();
-              await ch.send({ embeds: [embed], allowedMentions: { parse: [] } }).catch(console.error);
+          for (const item of settlementData.rankings) {
+            if (item.channelId) {
+              const ch = await client.channels.fetch(item.channelId).catch(() => null);
+              if (ch) {
+                const embed = new EmbedBuilder()
+                  .setTitle(`🏁 【第 ${round} 期結算戰報】${item.teamName}`)
+                  .setColor(0xf1c40f)
+                  .addFields(
+                    { name: '💰 結算現金', value: `$${item.cash.toLocaleString()}`, inline: true },
+                    { name: '📈 股票庫存市值', value: `$${item.stockValue.toLocaleString()}`, inline: true },
+                    { name: '🏦 總資產', value: `**$${item.totalAsset.toLocaleString()}**`, inline: true },
+                    { name: '🏆 當輪排名', value: `第 **${item.rank}** 名 (共 ${settlementData.totalTeams} 隊)`, inline: false }
+                  )
+                  .setFooter({ text: '依規則：其餘各隊詳細資產不公開。' })
+                  .setTimestamp();
+                await ch.send({ embeds: [embed], allowedMentions: { parse: [] } }).catch(console.error);
+              }
             }
           }
-        }
 
-        return interaction.editReply({
-          content: `🏁 **【第 ${round} 期結算完畢】**！已私密發送成績至各隊頻道。${isLastRound ? '（全 4 期完結）' : ''}`
-        });
+          return interaction.editReply({
+            content: `🏁 **【第 ${round} 期結算完畢】**！已私密發送成績至各隊頻道。${isLastRound ? '（全 4 期完結）' : ''}`
+          });
+        } catch (err) {
+          // 完整捕獲錯誤並通知關主，防止卡在「正在思考...」(H2)
+          return interaction.editReply({ content: `❌ 結算失敗：${err.message}` });
+        }
       }
 
       if (customId === 'admin_btn_give_cash') {
@@ -372,10 +393,15 @@ client.on('interactionCreate', async (interaction) => {
         if (!team) return;
 
         const sharesRaw = interaction.fields.getTextInputValue('shares_input').trim();
-        const shares = parseInt(sharesRaw, 10);
 
-        if (isNaN(shares) || shares <= 0) {
-          return interaction.reply({ content: '❌ 請輸入有效的正整數股數！', ephemeral: true });
+        // 嚴格整數正則校驗，杜絕 10.9 或 10abc 截斷靜默成交 (中風險 6)
+        if (!/^\d+$/.test(sharesRaw)) {
+          return interaction.reply({ content: '❌ 請輸入有效的正整數股數（不可包含小數點、符號或文字）！', ephemeral: true });
+        }
+
+        const shares = parseInt(sharesRaw, 10);
+        if (shares <= 0 || shares > 10000000) {
+          return interaction.reply({ content: '❌ 請輸入大於 0 且在合理範圍內的整數股數！', ephemeral: true });
         }
 
         try {

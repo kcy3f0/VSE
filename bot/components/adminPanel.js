@@ -84,13 +84,18 @@ export class AdminPanel {
     const overviews = teams.map(t => TeamService.getPortfolioOverview(t.id, round));
     overviews.sort((a, b) => b.totalAsset - a.totalAsset);
 
-    const lines = overviews.map((o, idx) => {
+    let lines = overviews.map((o, idx) => {
       const rankEmoji = idx === 0 ? '🥇' : idx === 1 ? '🥈' : idx === 2 ? '🥉' : `**#${idx + 1}**`;
       const holdingsDetail = o.holdings.length > 0
         ? o.holdings.map(h => `${h.stockId}:${h.shares}`).join(', ')
         : '無股票';
       return `${rankEmoji} **${o.teamName}**：總資產 **$${o.totalAsset.toLocaleString()}** (現金: $${o.cash.toLocaleString()} | 市值: $${o.totalStockValue.toLocaleString()})\n持股: \`${holdingsDetail}\``;
     }).join('\n\n');
+
+    // 防範 Discord Embed 4096 字元上限 (中風險 5)
+    if (lines.length > 3800) {
+      lines = lines.substring(0, 3800) + '\n\n...（小隊數量過長，其餘名次已省略顯示）';
+    }
 
     return new EmbedBuilder()
       .setTitle(`🏆 全場即時總榜 (第 ${round} 期 - 僅關主可見)`)

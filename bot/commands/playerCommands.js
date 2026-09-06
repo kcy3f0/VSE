@@ -147,12 +147,15 @@ export async function handlePlayerCommand(interaction) {
       });
     }
 
+    let fullContent = hints.map(h => `**【第 ${h.round} 期 • ${h.stockName}】**\n${h.content}`).join('\n\n');
+    if (fullContent.length > 3800) {
+      fullContent = fullContent.substring(0, 3800) + '\n\n...（情報字數過長，其餘內容已省略顯示，請洽關主查閱）';
+    }
+
     const embed = new EmbedBuilder()
       .setTitle(`💡 ${team.name} 已解鎖市場提示庫 (共 ${hints.length} 條)`)
       .setColor(0xf39c12)
-      .setDescription(
-        hints.map(h => `**【第 ${h.round} 期 • ${h.stockName}】**\n${h.content}`).join('\n\n')
-      )
+      .setDescription(fullContent)
       .setTimestamp();
 
     return interaction.reply({ embeds: [embed] });

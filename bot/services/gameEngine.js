@@ -246,10 +246,11 @@ export class GameEngine {
     // 依總資產降序排序
     teamSummaries.sort((a, b) => b.totalAsset - a.totalAsset);
 
-    // 計算名次 (處理同分同名次情況)
+    // 計算名次 (處理同分同名次情況，消除浮點數微小誤差)
+    const EPSILON = 0.001;
     let currentRank = 1;
     for (let i = 0; i < teamSummaries.length; i++) {
-      if (i > 0 && teamSummaries[i].totalAsset < teamSummaries[i - 1].totalAsset) {
+      if (i > 0 && (teamSummaries[i - 1].totalAsset - teamSummaries[i].totalAsset) > EPSILON) {
         currentRank = i + 1;
       }
       teamSummaries[i].rank = currentRank;

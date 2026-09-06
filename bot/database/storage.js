@@ -41,6 +41,24 @@ export class Storage {
     }
     if (!data.teams || typeof data.teams !== 'object') {
       data.teams = {};
+    } else {
+      // 深度消毒與防呆 (防 cash NaN 與資料型態污染)
+      for (const [id, t] of Object.entries(data.teams)) {
+        if (!t || typeof t !== 'object') {
+          delete data.teams[id];
+          continue;
+        }
+        if (typeof t.cash !== 'number' || isNaN(t.cash)) {
+          t.cash = Number(t.cash);
+          if (isNaN(t.cash) || t.cash < 0) t.cash = 0;
+        }
+        if (!t.portfolio || typeof t.portfolio !== 'object') {
+          t.portfolio = {};
+        }
+        if (!Array.isArray(t.unlockedHints)) t.unlockedHints = [];
+        if (!Array.isArray(t.transactions)) t.transactions = [];
+        if (!Array.isArray(t.history)) t.history = [];
+      }
     }
     if (!data.settlementHistory || typeof data.settlementHistory !== 'object') {
       data.settlementHistory = {};
@@ -167,6 +185,15 @@ export class Storage {
   }
 
   registerTeam(teamId, name, channelId) {
+    if (channelId) {
+      const conflictTeam = Object.values(this.data.teams).find(
+        t => t.id !== teamId && t.channelId === channelId
+      );
+      if (conflictTeam) {
+        throw new Error(`該頻道已被「${conflictTeam.name}」(${conflictTeam.id}) 綁定！每個文字頻道僅能綁定一個小隊。`);
+      }
+    }
+
     if (!this.data.teams[teamId]) {
       this.data.teams[teamId] = {
         id: teamId,
@@ -180,7 +207,7 @@ export class Storage {
       };
     } else {
       if (name) this.data.teams[teamId].name = name;
-      if (channelId) this.data.teams[teamId].channelId = channelId;
+      if (channelId !== undefined) this.data.teams[teamId].channelId = channelId;
     }
     this.save();
     return this.data.teams[teamId];
