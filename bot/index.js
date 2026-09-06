@@ -147,50 +147,56 @@ client.on('interactionCreate', async (interaction) => {
       }
 
       if (customId === 'admin_btn_start_quiz') {
-        const currentRound = db.getGameState().round;
-        GameEngine.startQuizStage(currentRound);
-        return interaction.reply({
-          content: `📢 **【第 ${currentRound} 期 • 闖關解題階段已開啟】** (市場休市)`,
-          ephemeral: true
-        });
+        try {
+          const newGameState = GameEngine.startQuizStage();
+          const currentRound = newGameState.round;
+          return interaction.reply({
+            content: `📢 **【第 ${currentRound} 期 • 闖關解題階段已開啟】** (市場休市)`,
+            ephemeral: true
+          });
+        } catch (err) {
+          return interaction.reply({ content: `❌ ${err.message}`, ephemeral: true });
+        }
       }
 
       if (customId === 'admin_btn_start_trading') {
         // 延遲響應防止多頻道推播超過 3 秒 (H3 防護)
         await interaction.deferReply({ ephemeral: true });
 
-        const currentRound = db.getGameState().round;
-        GameEngine.startTradingStage(
-          300,
-          async (remainingSec) => {
-            const teams = Object.values(db.getTeams());
-            for (const t of teams) {
-              if (t.channelId) {
-                const ch = await client.channels.fetch(t.channelId).catch(() => null);
-                if (ch) {
-                  await ch.send({
-                    content: `⏰ **【投資時間提醒】** 剩餘最後 **${remainingSec}** 秒！`,
-                    allowedMentions: { parse: [] }
-                  }).catch(console.error);
+        try {
+          const tradingResult = GameEngine.startTradingStage(
+            300,
+            async (remainingSec) => {
+              const teams = Object.values(db.getTeams());
+              for (const t of teams) {
+                if (t.channelId) {
+                  const ch = await client.channels.fetch(t.channelId).catch(() => null);
+                  if (ch) {
+                    await ch.send({
+                      content: `⏰ **【投資時間提醒】** 剩餘最後 **${remainingSec}** 秒！`,
+                      allowedMentions: { parse: [] }
+                    }).catch(console.error);
+                  }
+                }
+              }
+            },
+            async () => {
+              const teams = Object.values(db.getTeams());
+              for (const t of teams) {
+                if (t.channelId) {
+                  const ch = await client.channels.fetch(t.channelId).catch(() => null);
+                  if (ch) {
+                    await ch.send({
+                      content: `🛑 **【投資時間截止】** 市場已停止交易，等候結算！`,
+                      allowedMentions: { parse: [] }
+                    }).catch(console.error);
+                  }
                 }
               }
             }
-          },
-          async () => {
-            const teams = Object.values(db.getTeams());
-            for (const t of teams) {
-              if (t.channelId) {
-                const ch = await client.channels.fetch(t.channelId).catch(() => null);
-                if (ch) {
-                  await ch.send({
-                    content: `🛑 **【投資時間截止】** 市場已停止交易，等候結算！`,
-                    allowedMentions: { parse: [] }
-                  }).catch(console.error);
-                }
-              }
-            }
-          }
-        );
+          );
+
+          const currentRound = tradingResult.gameState.round;
 
         // 推播交易面板到各隊頻道
         const teams = Object.values(db.getTeams());
@@ -211,7 +217,10 @@ client.on('interactionCreate', async (interaction) => {
         return interaction.editReply({
           content: `🟢 **【第 ${currentRound} 期 • 5 分鐘投資交易已開啟！】** 已推播至各隊頻道並啟動倒數。`
         });
+      } catch (err) {
+        return interaction.editReply({ content: `❌ ${err.message}` });
       }
+    }
 
       if (customId === 'admin_btn_settle') {
         // 延遲響應防止多隊戰報發送逾時 (H3 防護)

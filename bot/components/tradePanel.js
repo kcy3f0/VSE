@@ -77,7 +77,7 @@ export class TradePanel {
         .setCustomId(`trade_open_sell:${teamId}`)
         .setLabel('💸 賣出股票')
         .setStyle(ButtonStyle.Danger)
-        .setDisabled(!isTrading || overview.holdings.length === 0),
+        .setDisabled(!isTrading || !overview.holdings.some(h => !h.isDelisted)),
       new ButtonBuilder()
         .setCustomId(`trade_refresh:${teamId}`)
         .setLabel('🔄 刷新資訊')

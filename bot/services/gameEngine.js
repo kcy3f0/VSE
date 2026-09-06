@@ -115,8 +115,15 @@ export class GameEngine {
     if (currentState.stage === 'ENDED') {
       throw new Error('【狀態錯誤】遊戲已經結束，無法再切換至闖關解題階段！');
     }
+    if (currentState.stage === 'TRADING') {
+      throw new Error('【狀態錯誤】目前市場正處於投資交易階段，請先結算或暫停市場後再切換至解題闖關階段！');
+    }
 
-    const targetRound = round ?? currentState.round;
+    let targetRound = round ?? currentState.round;
+    // 若從上一期結算 (SETTLED) 推進且未手動指定期數，自動推進至下一期
+    if (currentState.stage === 'SETTLED' && round === null) {
+      targetRound = currentState.round + 1;
+    }
 
     if (targetRound > TOTAL_ROUNDS) {
       throw new Error(`遊戲總共只有 ${TOTAL_ROUNDS} 期，請進行終局結算。`);
@@ -139,20 +146,33 @@ export class GameEngine {
     if (currentState.stage === 'ENDED') {
       throw new Error('【狀態錯誤】遊戲已經結束，無法再開啟投資交易！');
     }
-    if (currentState.round > TOTAL_ROUNDS) {
+    if (currentState.stage === 'TRADING') {
+      throw new Error('【狀態錯誤】目前市場已在投資交易階段中，請勿重複開啟！');
+    }
+
+    let currentRound = currentState.round;
+    // 若關主自 SETTLED 未經 QUIZ 直接開啟交易，自動進入下一期
+    if (currentState.stage === 'SETTLED') {
+      currentRound = currentState.round + 1;
+    }
+
+    if (currentRound > TOTAL_ROUNDS) {
       throw new Error('所有回合已完成！');
     }
 
     this.stopTimer();
 
-    const currentRound = currentState.round;
     const endsAt = Date.now() + durationSeconds * 1000;
     db.updateGameState({
+      round: currentRound,
       stage: 'TRADING',
       tradingEndsAt: endsAt
     });
 
-    // 啟動倒數檢查器 (綁定當前期數與狀態，解決 C5)
+    // 啟動倒數檢查器 (使用 Set 與閾值判定，杜絕 setInterval 飄移跳過提醒)
+    const notifiedTicks = new Set();
+    const checkpoints = [60, 30, 10];
+
     this.timer = setInterval(() => {
       const state = db.getGameState();
       // 若已非交易階段或回合已被切換，立即終止計時器
@@ -162,10 +182,15 @@ export class GameEngine {
       }
 
       const remainingMs = endsAt - Date.now();
-      const remainingSec = Math.ceil(remainingMs / 1000);
+      const remainingSec = Math.max(0, Math.floor(remainingMs / 1000));
 
-      if (onTick && (remainingSec === 60 || remainingSec === 30 || remainingSec === 10)) {
-        onTick(remainingSec);
+      if (onTick) {
+        for (const cp of checkpoints) {
+          if (remainingSec <= cp && !notifiedTicks.has(cp)) {
+            notifiedTicks.add(cp);
+            onTick(cp);
+          }
+        }
       }
 
       if (remainingMs <= 0) {
@@ -229,7 +254,7 @@ export class GameEngine {
       }
       teamSummaries[i].rank = currentRank;
 
-      // 更新隊伍本期紀錄
+      // 更新隊伍本期紀錄 (autoSave = false 批次優化，避免連續 I/O 爆發)
       const team = teams[teamSummaries[i].teamId];
       const history = [...(team.history || [])];
       history.push({
@@ -240,10 +265,10 @@ export class GameEngine {
         rank: currentRank,
         settledAt: Date.now()
       });
-      db.updateTeam(teamSummaries[i].teamId, { history });
+      db.updateTeam(teamSummaries[i].teamId, { history }, false);
     }
 
-    // 儲存結算歷史
+    // 儲存結算歷史 (會原子存檔一次，同步持久化上方更新之隊伍歷史)
     const settlementData = {
       round,
       timestamp: Date.now(),
@@ -256,7 +281,7 @@ export class GameEngine {
     db.updateGameState({
       stage: isLastRound ? 'ENDED' : 'SETTLED',
       tradingEndsAt: null,
-      round: isLastRound ? round : round + 1
+      round // 維持當前結算期數，待切換下一期解題或交易時再 +1，杜絕下一期股價提前洩露
     });
 
     return {

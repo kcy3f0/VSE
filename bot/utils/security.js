@@ -16,6 +16,9 @@ export function sanitizeText(text, maxLength = 200) {
     cleaned = cleaned.substring(0, maxLength);
   }
 
+  // 過濾 ASCII 控制字元 (保留換行與 Tab)
+  cleaned = cleaned.replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/g, '');
+
   // 插入零寬空格 (Zero-width space \u200B) 打破 Discord 標記與提及，並過濾反引號防破版
   cleaned = cleaned
     .replace(/@everyone/gi, '@\u200Beveryone')
@@ -32,6 +35,7 @@ export function sanitizeText(text, maxLength = 200) {
 /**
  * 小隊非同步互斥鎖佇列 (Async Mutex Queue)
  * 確保同一個小隊的多個交易或資金操作依序執行，防止競態條件 (Race Condition)
+ * 實作前序 Promise 自動捕獲屏障，免疫拒絕污染 (Rejection Contamination)
  */
 export class TeamMutex {
   constructor() {
@@ -44,21 +48,20 @@ export class TeamMutex {
    * @param {Function} fn 
    */
   async runExclusive(teamId, fn) {
-    const previousPromise = this.queues.get(teamId) || Promise.resolve();
+    const prev = this.queues.get(teamId) || Promise.resolve();
     let release;
-    const taskPromise = new Promise(resolve => {
+    const current = new Promise(resolve => {
       release = resolve;
     });
 
-    const chainedPromise = previousPromise.then(() => taskPromise);
-    this.queues.set(teamId, chainedPromise);
+    this.queues.set(teamId, current);
 
     try {
-      await previousPromise;
+      await prev.catch(() => {});
       return await fn();
     } finally {
       release();
-      if (this.queues.get(teamId) === chainedPromise) {
+      if (this.queues.get(teamId) === current) {
         this.queues.delete(teamId);
       }
     }

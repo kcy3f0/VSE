@@ -109,7 +109,19 @@ export class Storage {
         }
       }
 
-      fs.renameSync(this.tmpFile, this.dbFile);
+      try {
+        fs.renameSync(this.tmpFile, this.dbFile);
+      } catch (renameErr) {
+        // Windows 上跨檔案或高頻讀寫時可能短暫拋出 EPERM / EBUSY / EACCES
+        if (['EPERM', 'EBUSY', 'EACCES'].includes(renameErr.code)) {
+          fs.copyFileSync(this.tmpFile, this.dbFile);
+          try {
+            fs.unlinkSync(this.tmpFile);
+          } catch (_) {}
+        } else {
+          throw renameErr;
+        }
+      }
     } catch (err) {
       console.error('[Storage] 原子存檔失敗：', err);
       throw err;
@@ -174,13 +186,20 @@ export class Storage {
     return this.data.teams[teamId];
   }
 
-  updateTeam(teamId, updates) {
+  updateTeam(teamId, updates, autoSave = true) {
     if (this.data.teams[teamId]) {
       this.data.teams[teamId] = { ...this.data.teams[teamId], ...updates };
-      this.save();
+      if (autoSave) this.save();
       return this.data.teams[teamId];
     }
     return null;
+  }
+
+  batchUpdateTeams(updaterFn) {
+    if (typeof updaterFn === 'function') {
+      updaterFn(this.data.teams);
+      this.save();
+    }
   }
 
   saveSettlement(round, settlementData) {

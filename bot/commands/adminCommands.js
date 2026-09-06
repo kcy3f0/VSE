@@ -5,7 +5,7 @@ import { GameEngine } from '../services/gameEngine.js';
 import { TeamService } from '../services/teamService.js';
 import { AdminPanel } from '../components/adminPanel.js';
 import { TradePanel } from '../components/tradePanel.js';
-import { sanitizeText } from '../utils/security.js';
+import { sanitizeText, teamMutex } from '../utils/security.js';
 
 export const adminSlashCommands = [
   new SlashCommandBuilder()
@@ -169,115 +169,129 @@ export async function handleAdminCommand(interaction, client) {
 
   if (subcommand === 'round') {
     const stage = interaction.options.getString('stage');
-    const currentRound = db.getGameState().round;
 
     if (stage === 'quiz') {
-      GameEngine.startQuizStage(currentRound);
-      return interaction.reply({
-        content: `📢 **【第 ${currentRound} 期 • 闖關解題階段開始】**！\n此時市場休市，請各小隊進行闖關解題，答對可向關主索取提示或資金。`
-      });
+      try {
+        const newGameState = GameEngine.startQuizStage();
+        const currentRound = newGameState.round;
+        return interaction.reply({
+          content: `📢 **【第 ${currentRound} 期 • 闖關解題階段開始】**！\n此時市場休市，請各小隊進行闖關解題，答對可向關主索取提示或資金。`
+        });
+      } catch (err) {
+        return interaction.reply({ content: `❌ ${err.message}`, ephemeral: true });
+      }
     }
 
     if (stage === 'trading') {
       // 避免多頻道廣播逾 3 秒 (H3 防護)
       await interaction.deferReply();
 
-      GameEngine.startTradingStage(
-        300,
-        async (remainingSec) => {
-          // 倒數提醒發送至各小隊頻道
-          const teams = Object.values(db.getTeams());
-          for (const t of teams) {
-            if (t.channelId) {
-              const ch = await client.channels.fetch(t.channelId).catch(() => null);
-              if (ch) {
-                await ch.send({
-                  content: `⏰ **【投資時間提醒】** 剩餘最後 **${remainingSec}** 秒，請把握時間確認下單！`,
-                  allowedMentions: { parse: [] }
-                }).catch(console.error);
+      try {
+        const tradingResult = GameEngine.startTradingStage(
+          300,
+          async (remainingSec) => {
+            // 倒數提醒發送至各小隊頻道
+            const teams = Object.values(db.getTeams());
+            for (const t of teams) {
+              if (t.channelId) {
+                const ch = await client.channels.fetch(t.channelId).catch(() => null);
+                if (ch) {
+                  await ch.send({
+                    content: `⏰ **【投資時間提醒】** 剩餘最後 **${remainingSec}** 秒，請把握時間確認下單！`,
+                    allowedMentions: { parse: [] }
+                  }).catch(console.error);
+                }
+              }
+            }
+          },
+          async () => {
+            // 時間到自動提示
+            const teams = Object.values(db.getTeams());
+            for (const t of teams) {
+              if (t.channelId) {
+                const ch = await client.channels.fetch(t.channelId).catch(() => null);
+                if (ch) {
+                  await ch.send({
+                    content: `🛑 **【投資時間截止】** 市場已停止交易，請等候關主公布結算結果！`,
+                    allowedMentions: { parse: [] }
+                  }).catch(console.error);
+                }
               }
             }
           }
-        },
-        async () => {
-          // 時間到自動提示
-          const teams = Object.values(db.getTeams());
-          for (const t of teams) {
-            if (t.channelId) {
-              const ch = await client.channels.fetch(t.channelId).catch(() => null);
-              if (ch) {
-                await ch.send({
-                  content: `🛑 **【投資時間截止】** 市場已停止交易，請等候關主公布結算結果！`,
-                  allowedMentions: { parse: [] }
-                }).catch(console.error);
-              }
-            }
-          }
-        }
-      );
+        );
 
-      // 向所有小隊頻道發送交易面板
-      const teams = Object.values(db.getTeams());
-      for (const t of teams) {
-        if (t.channelId) {
-          const ch = await client.channels.fetch(t.channelId).catch(() => null);
-          if (ch) {
-            const panel = TradePanel.buildPanel(t.id);
-            await ch.send({
-              content: `🟢 **【第 ${currentRound} 期 • 5分鐘投資時間開始！】** 市場已開盤，請使用下方按鈕或 \`/buy\`、\`/sell\` 進行交易：`,
-              ...panel,
-              allowedMentions: { parse: [] }
-            }).catch(console.error);
+        const currentRound = tradingResult.gameState.round;
+
+        // 向所有小隊頻道發送交易面板
+        const teams = Object.values(db.getTeams());
+        for (const t of teams) {
+          if (t.channelId) {
+            const ch = await client.channels.fetch(t.channelId).catch(() => null);
+            if (ch) {
+              const panel = TradePanel.buildPanel(t.id);
+              await ch.send({
+                content: `🟢 **【第 ${currentRound} 期 • 5分鐘投資時間開始！】** 市場已開盤，請使用下方按鈕或 \`/buy\`、\`/sell\` 進行交易：`,
+                ...panel,
+                allowedMentions: { parse: [] }
+              }).catch(console.error);
+            }
           }
         }
+
+        return interaction.editReply({
+          content: `🟢 **【第 ${currentRound} 期 • 5 分鐘投資交易階段已開啟！】**\n已向所有綁定的小隊頻道推播交易看板並啟動倒數計時。`
+        });
+      } catch (err) {
+        return interaction.editReply({ content: `❌ ${err.message}` });
       }
-
-      return interaction.editReply({
-        content: `🟢 **【第 ${currentRound} 期 • 5 分鐘投資交易階段已開啟！】**\n已向所有綁定的小隊頻道推播交易看板並啟動倒數計時。`
-      });
     }
 
     if (stage === 'settle') {
       // 避免多頻道發送戰報逾 3 秒 (H3 防護)
       await interaction.deferReply();
 
-      const settleResult = GameEngine.settleRound();
-      const { round, isLastRound, settlementData } = settleResult;
+      try {
+        const settleResult = GameEngine.settleRound();
+        const { round, isLastRound, settlementData } = settleResult;
 
-      // 向各小隊專屬頻道發送私密結算單
-      for (const item of settlementData.rankings) {
-        if (item.channelId) {
-          const ch = await client.channels.fetch(item.channelId).catch(() => null);
-          if (ch) {
-            const embed = new EmbedBuilder()
-              .setTitle(`🏁 【第 ${round} 期結算戰報】${item.teamName}`)
-              .setColor(0xf1c40f)
-              .setDescription(`本期投資時間已結束，以下為貴隊資產與目前成績：`)
-              .addFields(
-                { name: '💰 結算現金', value: `$${item.cash.toLocaleString()}`, inline: true },
-                { name: '📈 股票庫存現值', value: `$${item.stockValue.toLocaleString()}`, inline: true },
-                { name: '🏦 總資產', value: `**$${item.totalAsset.toLocaleString()}**`, inline: true },
-                { name: '🏆 當輪全場排名', value: `第 **${item.rank}** 名 (共 ${settlementData.totalTeams} 隊)`, inline: false }
-              )
-              .setFooter({ text: '依規則：其餘各隊詳細持股與資產不公開。' })
-              .setTimestamp();
+        // 向各小隊專屬頻道發送私密結算單
+        for (const item of settlementData.rankings) {
+          if (item.channelId) {
+            const ch = await client.channels.fetch(item.channelId).catch(() => null);
+            if (ch) {
+              const embed = new EmbedBuilder()
+                .setTitle(`🏁 【第 ${round} 期結算戰報】${item.teamName}`)
+                .setColor(0xf1c40f)
+                .setDescription(`本期投資時間已結束，以下為貴隊資產與目前成績：`)
+                .addFields(
+                  { name: '💰 結算現金', value: `$${item.cash.toLocaleString()}`, inline: true },
+                  { name: '📈 股票庫存現值', value: `$${item.stockValue.toLocaleString()}`, inline: true },
+                  { name: '🏦 總資產', value: `**$${item.totalAsset.toLocaleString()}**`, inline: true },
+                  { name: '🏆 當輪全場排名', value: `第 **${item.rank}** 名 (共 ${settlementData.totalTeams} 隊)`, inline: false }
+                )
+                .setFooter({ text: '依規則：其餘各隊詳細持股與資產不公開。' })
+                .setTimestamp();
 
-            await ch.send({
-              embeds: [embed],
-              allowedMentions: { parse: [] }
-            }).catch(console.error);
+              await ch.send({
+                embeds: [embed],
+                allowedMentions: { parse: [] }
+              }).catch(console.error);
+            }
           }
         }
-      }
 
-      let replyMsg = `🏁 **【第 ${round} 期結算完畢】**！\n已將各隊專屬戰報與名次私密發布至各自頻道。`;
-      if (isLastRound) {
-        replyMsg += `\n🎉 **恭喜！全場 4 個分期競賽已圓滿結束！** 請使用 \`/gm status\` 查看全場最終名次。`;
-      } else {
-        replyMsg += `\n下一期為第 **${settleResult.nextRound}** 期。請關主就緒後切換至 QUIZ 階段。`;
-      }
+        let replyMsg = `🏁 **【第 ${round} 期結算完畢】**！\n已將各隊專屬戰報與名次私密發布至各自頻道。`;
+        if (isLastRound) {
+          replyMsg += `\n🎉 **恭喜！全場 4 個分期競賽已圓滿結束！** 請使用 \`/gm status\` 查看全場最終名次。`;
+        } else {
+          replyMsg += `\n下一期為第 **${settleResult.nextRound}** 期。請關主就緒後切換至 QUIZ 階段。`
+        }
 
-      return interaction.editReply({ content: replyMsg });
+        return interaction.editReply({ content: replyMsg });
+      } catch (err) {
+        return interaction.editReply({ content: `❌ ${err.message}` });
+      }
     }
   }
 
@@ -287,7 +301,9 @@ export async function handleAdminCommand(interaction, client) {
     const reason = interaction.options.getString('reason');
 
     try {
-      const result = TeamService.addCash(teamId, amount, reason);
+      const result = await teamMutex.runExclusive(teamId, async () => {
+        return TeamService.addCash(teamId, amount, reason);
+      });
       const team = result.team;
 
       // 若小隊有綁定頻道，發送通知
@@ -321,7 +337,9 @@ export async function handleAdminCommand(interaction, client) {
     const round = db.getGameState().round;
 
     try {
-      const result = TeamService.unlockHint(teamId, round, stockId);
+      const result = await teamMutex.runExclusive(teamId, async () => {
+        return TeamService.unlockHint(teamId, round, stockId);
+      });
       const team = db.getTeam(teamId);
 
       // 發送通知到小隊頻道

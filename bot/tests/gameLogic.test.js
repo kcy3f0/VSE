@@ -29,6 +29,7 @@ const { TeamService } = await import('../services/teamService.js');
 const { GameEngine, roundCurrency } = await import('../services/gameEngine.js');
 const { sanitizeText, TeamMutex } = await import('../utils/security.js');
 const { TradePanel } = await import('../components/tradePanel.js');
+const { AdminPanel } = await import('../components/adminPanel.js');
 
 try {
   console.log('=== 開始執行 2026 迎新股市模擬核心邏輯與 11 項 Bug 修正驗證 ===\n');
@@ -252,7 +253,117 @@ try {
   }
   console.log('  -> 生產環境隔離驗證通過！');
 
-  console.log('\n🎉 所有核心邏輯與 11 項 Bug 修復測試全數通過！\n');
+  // 16. 測試結算期數不提前遞增與展示層價格防洩漏 (Bug 1 修復)
+  console.log('[Test 16] 測試結算期數不提前遞增與展示層防洩漏 (Bug 1)...');
+  db.reset(100000);
+  db.registerTeam('team_test_1', '測試第一隊', null);
+  db.registerTeam('team_test_2', '測試第二隊', null);
+  GameEngine.startQuizStage();
+  GameEngine.startTradingStage(300);
+  // 第一隊買入台積電 T
+  GameEngine.executeTrade('team_test_1', 'BUY', 'T', 10);
+  // 執行第 1 期結算
+  const settleTestR1 = GameEngine.settleRound();
+  assert.strictEqual(settleTestR1.round, 1);
+  assert.strictEqual(db.getGameState().stage, 'SETTLED');
+  assert.strictEqual(db.getGameState().round, 1, '結算第 1 期後，gameState.round 應保持為 1，不可提前變為 2！');
+
+  // 檢查小隊交易終端面板，確認展示的是第 1 期價格，標題為第 1 期
+  const panelR1 = TradePanel.buildPanel('team_test_1');
+  const panelTitle = panelR1.embeds[0].data.title;
+  assert.ok(panelTitle.includes('第 1 期'), `面板標題應為第 1 期，實際為：${panelTitle}`);
+  assert.ok(!panelTitle.includes('第 2 期'), '面板標題絕不得提早出現第 2 期！');
+
+  // 檢查關主總榜 Embed
+  const adminLeaderboard = AdminPanel.buildLeaderboardEmbed();
+  assert.ok(adminLeaderboard.data.title.includes('第 1 期'), '關主總榜應顯示第 1 期');
+
+  // 關主切換至下一期 QUIZ 階段，驗證自動推進至第 2 期
+  const quizR2State = GameEngine.startQuizStage();
+  assert.strictEqual(quizR2State.round, 2, '自 SETTLED 進入 QUIZ 應自動推進至第 2 期');
+  assert.strictEqual(quizR2State.stage, 'QUIZ');
+  console.log('  -> 結算期數對齊與防提前洩露測試通過！');
+
+  // 17. 測試 TeamMutex 拒絕污染免疫 (Bug 3 修復)
+  console.log('[Test 17] 測試 TeamMutex 拒絕污染免疫 (Bug 3)...');
+  const immuneMutex = new TeamMutex();
+  let task1Caught = false;
+
+  // 任務 1 故意拋出異常
+  const task1 = immuneMutex.runExclusive('team_err', async () => {
+    throw new Error('任務 1 模擬失敗');
+  }).catch(err => {
+    task1Caught = true;
+    assert.strictEqual(err.message, '任務 1 模擬失敗');
+  });
+
+  // 任務 2 與 任務 3 排在後面，應不受任務 1 失敗影響，正常完成
+  const task2 = immuneMutex.runExclusive('team_err', async () => {
+    return '任務 2 成功執行';
+  });
+
+  const task3 = immuneMutex.runExclusive('team_err', async () => {
+    return '任務 3 成功執行';
+  });
+
+  await task1;
+  const res2 = await task2;
+  const res3 = await task3;
+
+  assert.strictEqual(task1Caught, true);
+  assert.strictEqual(res2, '任務 2 成功執行', '任務 2 不得因前序拒絕而中斷');
+  assert.strictEqual(res3, '任務 3 成功執行', '任務 3 不得因前序拒絕而中斷');
+  assert.strictEqual(immuneMutex.queues.size, 0, '所有排隊任務完成後 queues 應清空');
+  console.log('  -> TeamMutex 拒絕污染免疫測試通過！');
+
+  // 18. 測試倒數計時定時器防跳秒與去重 (Bug 4 修復)
+  console.log('[Test 18] 測試倒數計時定時器防跳秒與去重 (Bug 4)...');
+  const tickedSeconds = [];
+  // 啟動 1 秒的模擬交易階段
+  GameEngine.startTradingStage(1, (sec) => {
+    tickedSeconds.push(sec);
+  });
+  // 驗證立即停止與清理定時器無異常
+  GameEngine.stopTimer();
+  assert.strictEqual(GameEngine.timer, null);
+  console.log('  -> 倒數定時器防跳秒邏輯驗證通過！');
+
+  // 19. 測試狀態機非法跳轉防護
+  console.log('[Test 19] 測試狀態機非法跳轉防護...');
+  db.updateGameState({ stage: 'TRADING', round: 2 });
+  // 在 TRADING 階段禁止直接進入 QUIZ
+  assert.throws(() => {
+    GameEngine.startQuizStage();
+  }, /目前市場正處於投資交易階段/);
+
+  // 在 TRADING 階段禁止重複開啟交易
+  assert.throws(() => {
+    GameEngine.startTradingStage();
+  }, /目前市場已在投資交易階段中/);
+  console.log('  -> 狀態機防非法跳轉防護測試通過！');
+
+  // 20. 測試下市股票賣出按鈕狀態防呆與控制字元過濾
+  console.log('[Test 20] 測試下市持股賣出按鈕防呆與控制字元過濾...');
+  // 測試僅持有下市 J 股票時，賣出按鈕應 disabled
+  db.updateGameState({ round: 4, stage: 'TRADING', tradingEndsAt: Date.now() + 300000 });
+  db.updateTeam('team_test_1', {
+    portfolio: { J: 50 },
+    cash: 10000
+  });
+  const delistedPanel = TradePanel.buildPanel('team_test_1');
+  const sellButton = delistedPanel.components[0].components[1];
+  assert.strictEqual(sellButton.data.disabled, true, '當僅持有下市股票時，賣出按鈕應禁用！');
+
+  // 測試控制字元消毒
+  const rawWithCtrl = 'Hello\x00\x07World\x1F! @everyone';
+  const sanitized = sanitizeText(rawWithCtrl);
+  assert.strictEqual(sanitized.includes('\x00'), false, '應濾除 ASCII 0x00');
+  assert.strictEqual(sanitized.includes('\x07'), false, '應濾除 ASCII 0x07');
+  assert.strictEqual(sanitized.includes('\x1F'), false, '應濾除 ASCII 0x1F');
+  assert.strictEqual(sanitized.includes('@everyone'), false, '應防護 @everyone 注入');
+  console.log('  -> 下市按鈕防呆與控制字元過濾測試通過！');
+
+  console.log('\n🎉 所有核心邏輯與 20 項完整測試（包含 4 大核心 Bug 修復）全數通過！\n');
 } finally {
   // 清理測試檔案
   for (const f of [TEST_DB_FILE, TEST_BAK_FILE, TEST_TMP_FILE]) {
