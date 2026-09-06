@@ -3,6 +3,8 @@ import { STOCKS } from '../config/marketData.js';
 import { HINTS } from '../config/hintsData.js';
 import { sanitizeText } from '../utils/security.js';
 
+const roundCurrency = (val) => Math.round((Number(val) + Number.EPSILON) * 100) / 100;
+
 export class TeamService {
   // 註冊或綁定小隊到文字頻道
   static bindTeamChannel(teamId, teamName, channelId) {
@@ -24,7 +26,7 @@ export class TeamService {
 
     const defaultReason = amount >= 0 ? '關主發放獎勵資金' : '關主扣除校正資金';
     const cleanReason = sanitizeText(reason || defaultReason, 100);
-    const newCash = team.cash + amount;
+    const newCash = roundCurrency(team.cash + amount);
 
     const tx = {
       id: Date.now().toString(36) + Math.random().toString(36).substring(2, 6),
@@ -53,6 +55,9 @@ export class TeamService {
     const gameState = db.getGameState();
     if (gameState.stage !== 'QUIZ') {
       throw new Error('市場情報僅能在「闖關解題階段 (QUIZ)」發放！');
+    }
+    if (round !== gameState.round) {
+      throw new Error(`【發放失敗】僅能發放當前分期（第 ${gameState.round} 期）之情報，不可跨期發放！`);
     }
 
     const team = db.getTeam(teamId);

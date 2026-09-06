@@ -5,6 +5,7 @@ import { GameEngine } from '../services/gameEngine.js';
 import { TeamService } from '../services/teamService.js';
 import { AdminPanel } from '../components/adminPanel.js';
 import { TradePanel } from '../components/tradePanel.js';
+import { sanitizeText } from '../utils/security.js';
 
 export const adminSlashCommands = [
   new SlashCommandBuilder()
@@ -138,8 +139,9 @@ export async function handleAdminCommand(interaction, client) {
 
   if (subcommand === 'setup') {
     const count = interaction.options.getInteger('team_count');
-    const cash = interaction.options.getInteger('initial_cash') || 100000;
+    const cash = interaction.options.getInteger('initial_cash') ?? 100000;
 
+    GameEngine.stopTimer();
     db.reset(cash);
     for (let i = 1; i <= count; i++) {
       const id = `team_${i}`;
@@ -155,11 +157,13 @@ export async function handleAdminCommand(interaction, client) {
   if (subcommand === 'bind') {
     const teamId = interaction.options.getString('team_id');
     const channel = interaction.options.getChannel('channel');
-    const customName = interaction.options.getString('name');
+    const rawCustomName = interaction.options.getString('name');
+    const customName = rawCustomName ? sanitizeText(rawCustomName, 50) : null;
 
     const team = db.registerTeam(teamId, customName, channel.id);
     return interaction.reply({
-      content: `✅ 成功將 **${team.name}** (${team.id}) 綁定至文字頻道 <#${channel.id}>！`
+      content: `✅ 成功將 **${team.name}** (${team.id}) 綁定至文字頻道 <#${channel.id}>！`,
+      allowedMentions: { parse: [] }
     });
   }
 
@@ -373,6 +377,7 @@ export async function handleAdminCommand(interaction, client) {
     const confirm = interaction.options.getBoolean('confirm');
     if (!confirm) return interaction.reply({ content: '已取消重設操作。', ephemeral: true });
 
+    GameEngine.stopTimer();
     db.reset();
     return interaction.reply({ content: '🔄 **已成功重設遊戲！** 所有小隊、持股與交易紀錄已歸零。' });
   }

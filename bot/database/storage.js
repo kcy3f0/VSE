@@ -22,45 +22,74 @@ const defaultState = {
   settlementHistory: {} // round -> { timestamp, rankings: [{ teamId, rank, cash, stockValue, totalAsset }] }
 };
 
-class Storage {
-  constructor() {
+export class Storage {
+  constructor(customDbPath = null) {
+    this.dbFile = customDbPath || process.env.VSE_DB_PATH || DB_FILE;
+    this.dataDir = path.dirname(this.dbFile);
+    this.tmpFile = `${this.dbFile}.tmp`;
+    this.bakFile = `${this.dbFile}.bak`;
     this.data = JSON.parse(JSON.stringify(defaultState));
     this.init();
   }
 
+  validateAndSanitizeData(data) {
+    if (!data || typeof data !== 'object') return false;
+    if (!data.gameState || typeof data.gameState !== 'object') {
+      data.gameState = { ...defaultState.gameState };
+    } else {
+      data.gameState = { ...defaultState.gameState, ...data.gameState };
+    }
+    if (!data.teams || typeof data.teams !== 'object') {
+      data.teams = {};
+    }
+    if (!data.settlementHistory || typeof data.settlementHistory !== 'object') {
+      data.settlementHistory = {};
+    }
+    return true;
+  }
+
   init() {
-    if (!fs.existsSync(DATA_DIR)) {
-      fs.mkdirSync(DATA_DIR, { recursive: true });
+    if (!fs.existsSync(this.dataDir)) {
+      fs.mkdirSync(this.dataDir, { recursive: true });
     }
 
     let loaded = false;
 
     // 嘗試從主要資料庫檔案載入
-    if (fs.existsSync(DB_FILE)) {
+    if (fs.existsSync(this.dbFile)) {
       try {
-        const raw = fs.readFileSync(DB_FILE, 'utf-8');
-        this.data = JSON.parse(raw);
-        console.log('[Storage] 成功自本地載入遊戲狀態檔。');
-        loaded = true;
+        const raw = fs.readFileSync(this.dbFile, 'utf-8');
+        const parsed = JSON.parse(raw);
+        if (this.validateAndSanitizeData(parsed)) {
+          this.data = parsed;
+          console.log(`[Storage] 成功自 ${this.dbFile} 載入遊戲狀態檔。`);
+          loaded = true;
+        } else {
+          console.warn('[Storage] 資料庫結構不符，嘗試自備份檔還原。');
+        }
       } catch (err) {
         console.error('[Storage] 主要資料庫損毀或解析失敗：', err.message);
       }
     }
 
     // 若主檔損毀，嘗試從備份檔還原
-    if (!loaded && fs.existsSync(BAK_FILE)) {
+    if (!loaded && fs.existsSync(this.bakFile)) {
       try {
-        const rawBak = fs.readFileSync(BAK_FILE, 'utf-8');
-        this.data = JSON.parse(rawBak);
-        console.log('[Storage] 成功自備份檔 (gamestate.json.bak) 還原遊戲狀態！');
-        loaded = true;
-        this.save();
+        const rawBak = fs.readFileSync(this.bakFile, 'utf-8');
+        const parsedBak = JSON.parse(rawBak);
+        if (this.validateAndSanitizeData(parsedBak)) {
+          this.data = parsedBak;
+          console.log(`[Storage] 成功自備份檔 (${this.bakFile}) 還原遊戲狀態！`);
+          loaded = true;
+          this.save();
+        }
       } catch (bakErr) {
         console.error('[Storage] 備份檔亦無法讀取：', bakErr.message);
       }
     }
 
     if (!loaded) {
+      this.data = JSON.parse(JSON.stringify(defaultState));
       this.save();
       console.log('[Storage] 已建立全新遊戲狀態檔。');
     }
@@ -70,19 +99,20 @@ class Storage {
   save() {
     try {
       const content = JSON.stringify(this.data, null, 2);
-      fs.writeFileSync(TMP_FILE, content, 'utf-8');
+      fs.writeFileSync(this.tmpFile, content, 'utf-8');
 
-      if (fs.existsSync(DB_FILE)) {
+      if (fs.existsSync(this.dbFile)) {
         try {
-          fs.copyFileSync(DB_FILE, BAK_FILE);
+          fs.copyFileSync(this.dbFile, this.bakFile);
         } catch (copyErr) {
           console.warn('[Storage] 備份檔案建立失敗：', copyErr.message);
         }
       }
 
-      fs.renameSync(TMP_FILE, DB_FILE);
+      fs.renameSync(this.tmpFile, this.dbFile);
     } catch (err) {
       console.error('[Storage] 原子存檔失敗：', err);
+      throw err;
     }
   }
 

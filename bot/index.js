@@ -50,7 +50,14 @@ function checkTeamChannel(interaction, teamId) {
     interaction.reply({ content: `❌ 找不到指定小隊（代號：${teamId}）！`, ephemeral: true }).catch(() => {});
     return null;
   }
-  if (team.channelId && team.channelId !== interaction.channelId) {
+  if (!team.channelId) {
+    interaction.reply({
+      content: `❌ 操作被拒絕：**${team.name}** 尚未綁定至任何專屬文字頻道！請聯繫關主使用 \`/gm bind\` 進行綁定。`,
+      ephemeral: true
+    }).catch(() => {});
+    return null;
+  }
+  if (team.channelId !== interaction.channelId) {
     interaction.reply({
       content: `❌ 操作被拒絕：您只能在 **${team.name}** 的專屬文字頻道 (<#${team.channelId}>) 進行交易或查看情報！`,
       ephemeral: true

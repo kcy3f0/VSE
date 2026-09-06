@@ -16,13 +16,15 @@ export function sanitizeText(text, maxLength = 200) {
     cleaned = cleaned.substring(0, maxLength);
   }
 
-  // 插入零寬空格 (Zero-width space \u200B) 打破 Discord 標記
+  // 插入零寬空格 (Zero-width space \u200B) 打破 Discord 標記與提及，並過濾反引號防破版
   cleaned = cleaned
     .replace(/@everyone/gi, '@\u200Beveryone')
     .replace(/@here/gi, '@\u200Bhere')
     .replace(/<@&/g, '<@\u200B&')
     .replace(/<@!/g, '<@\u200B!')
-    .replace(/<@/g, '<@\u200B');
+    .replace(/<@/g, '<@\u200B')
+    .replace(/<#/g, '<#\u200B')
+    .replace(/`/g, '＇');
 
   return cleaned;
 }
@@ -31,7 +33,7 @@ export function sanitizeText(text, maxLength = 200) {
  * 小隊非同步互斥鎖佇列 (Async Mutex Queue)
  * 確保同一個小隊的多個交易或資金操作依序執行，防止競態條件 (Race Condition)
  */
-class TeamMutex {
+export class TeamMutex {
   constructor() {
     this.queues = new Map();
   }
@@ -48,14 +50,15 @@ class TeamMutex {
       release = resolve;
     });
 
-    this.queues.set(teamId, previousPromise.then(() => taskPromise));
+    const chainedPromise = previousPromise.then(() => taskPromise);
+    this.queues.set(teamId, chainedPromise);
 
     try {
       await previousPromise;
       return await fn();
     } finally {
       release();
-      if (this.queues.get(teamId) === taskPromise) {
+      if (this.queues.get(teamId) === chainedPromise) {
         this.queues.delete(teamId);
       }
     }

@@ -2,14 +2,27 @@ import { db } from '../database/storage.js';
 import { STOCKS, TOTAL_ROUNDS, DEFAULT_TRADING_DURATION_SECONDS } from '../config/marketData.js';
 import { TeamService } from './teamService.js';
 
+export function roundCurrency(value) {
+  return Math.round((Number(value) + Number.EPSILON) * 100) / 100;
+}
+
 export class GameEngine {
   static timer = null;
 
-  // 執行買賣交易
+  static stopTimer() {
+    if (this.timer) {
+      clearInterval(this.timer);
+      this.timer = null;
+    }
+  }
+
+  // 執行小隊買賣交易 (嚴格原子校驗)
   static executeTrade(teamId, type, stockId, shares) {
     const gameState = db.getGameState();
+
+    // 檢查是否為投資交易時間
     if (gameState.stage !== 'TRADING') {
-      throw new Error('目前非投資交易階段，市場已關閉！請在 5 分鐘投資時間內進行下單。');
+      throw new Error('【非交易時間】目前非投資交易階段，市場已休市！');
     }
 
     // 檢查是否已逾 5 分鐘投資時間
@@ -35,7 +48,7 @@ export class GameEngine {
       throw new Error('交易股數必須為大於 0 的正整數！');
     }
 
-    const totalCost = currentPrice * shares;
+    const totalCost = roundCurrency(currentPrice * shares);
     const portfolio = { ...(team.portfolio || {}) };
     const currentHolding = portfolio[stockId] || 0;
 
@@ -46,14 +59,14 @@ export class GameEngine {
       if (team.cash < totalCost) {
         throw new Error(`【現金不足】購買 ${shares} 股 ${stock.name} 需要 $${totalCost.toLocaleString()}，您目前現金僅有 $${team.cash.toLocaleString()}。`);
       }
-      newCash = team.cash - totalCost;
+      newCash = roundCurrency(team.cash - totalCost);
       newHolding = currentHolding + shares;
       portfolio[stockId] = newHolding;
     } else if (type === 'SELL') {
       if (currentHolding < shares) {
         throw new Error(`【庫存不足】您目前僅持有 ${currentHolding} 股 ${stock.name}，無法賣出 ${shares} 股！`);
       }
-      newCash = team.cash + totalCost;
+      newCash = roundCurrency(team.cash + totalCost);
       newHolding = currentHolding - shares;
       if (newHolding === 0) {
         delete portfolio[stockId];
@@ -61,19 +74,19 @@ export class GameEngine {
         portfolio[stockId] = newHolding;
       }
     } else {
-      throw new Error('無效的交易類型 (必須為 BUY 或 SELL)');
+      throw new Error(`未知的交易類型：${type}`);
     }
 
+    // 建立交易紀錄
     const tx = {
-      id: Date.now().toString(36) + Math.random().toString(36).substring(2, 6),
+      id: `tx_${Date.now()}_${Math.random().toString(36).substr(2, 5)}`,
       round,
       type,
       stockId,
       stockName: stock.name,
       shares,
       price: currentPrice,
-      totalAmount: totalCost,
-      cashAfter: newCash,
+      totalCost,
       timestamp: Date.now()
     };
 
@@ -99,16 +112,17 @@ export class GameEngine {
   // 推進至解題闖關階段
   static startQuizStage(round = null) {
     const currentState = db.getGameState();
+    if (currentState.stage === 'ENDED') {
+      throw new Error('【狀態錯誤】遊戲已經結束，無法再切換至闖關解題階段！');
+    }
+
     const targetRound = round ?? currentState.round;
 
     if (targetRound > TOTAL_ROUNDS) {
       throw new Error(`遊戲總共只有 ${TOTAL_ROUNDS} 期，請進行終局結算。`);
     }
 
-    if (this.timer) {
-      clearInterval(this.timer);
-      this.timer = null;
-    }
+    this.stopTimer();
 
     db.updateGameState({
       round: targetRound,
@@ -122,14 +136,14 @@ export class GameEngine {
   // 推進至投資交易階段
   static startTradingStage(durationSeconds = DEFAULT_TRADING_DURATION_SECONDS, onTick = null, onExpire = null) {
     const currentState = db.getGameState();
+    if (currentState.stage === 'ENDED') {
+      throw new Error('【狀態錯誤】遊戲已經結束，無法再開啟投資交易！');
+    }
     if (currentState.round > TOTAL_ROUNDS) {
       throw new Error('所有回合已完成！');
     }
 
-    if (this.timer) {
-      clearInterval(this.timer);
-      this.timer = null;
-    }
+    this.stopTimer();
 
     const currentRound = currentState.round;
     const endsAt = Date.now() + durationSeconds * 1000;
@@ -143,8 +157,7 @@ export class GameEngine {
       const state = db.getGameState();
       // 若已非交易階段或回合已被切換，立即終止計時器
       if (state.stage !== 'TRADING' || state.round !== currentRound) {
-        clearInterval(this.timer);
-        this.timer = null;
+        this.stopTimer();
         return;
       }
 
@@ -156,8 +169,7 @@ export class GameEngine {
       }
 
       if (remainingMs <= 0) {
-        clearInterval(this.timer);
-        this.timer = null;
+        this.stopTimer();
         if (onExpire) {
           onExpire();
         }
@@ -173,13 +185,21 @@ export class GameEngine {
 
   // 結算當前分期
   static settleRound() {
-    if (this.timer) {
-      clearInterval(this.timer);
-      this.timer = null;
-    }
+    this.stopTimer();
 
     const state = db.getGameState();
+    if (state.stage === 'ENDED') {
+      throw new Error('【結算失敗】遊戲已經結束，無法重複進行終局結算！');
+    }
+    if (state.stage !== 'TRADING') {
+      throw new Error(`【結算失敗】當前階段為「${state.stage}」，僅能在投資交易階段 (TRADING) 進行結算！`);
+    }
+
     const round = state.round;
+    if (db.getSettlement(round)) {
+      throw new Error(`【結算失敗】第 ${round} 期已經完成結算，請勿重複結算！`);
+    }
+
     const teams = db.getTeams();
 
     const teamSummaries = [];

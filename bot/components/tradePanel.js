@@ -13,8 +13,8 @@ export class TradePanel {
     // 格式化行情
     let stockLines = '';
     for (const [id, stock] of Object.entries(STOCKS)) {
-      const price = stock.prices[round];
-      const prevPrice = round > 1 ? stock.prices[round - 1] : null;
+      const price = stock.prices[round] ?? 0;
+      const prevPrice = round > 1 ? (stock.prices[round - 1] ?? 0) : null;
       let diffStr = '';
       if (prevPrice !== null) {
         const diff = price - prevPrice;
@@ -96,11 +96,14 @@ export class TradePanel {
     const gameState = db.getGameState();
     const round = gameState.round;
 
-    const options = Object.values(STOCKS).map(stock => {
-      const isDelisted = stock.delistedInRound === round;
+    // 過濾出當期未下市之股票 (已下市無法買入，與賣出選單保持一致)
+    const buyableStocks = Object.values(STOCKS).filter(stock => stock.delistedInRound !== round);
+
+    const options = buyableStocks.map(stock => {
+      const price = stock.prices[round] ?? 0;
       return {
         label: `${stock.id} - ${stock.name}`,
-        description: isDelisted ? '【本期已下市，無法買入】' : `當期價格：$${stock.prices[round].toFixed(2)}`,
+        description: `當期價格：$${price.toFixed(2)}`,
         value: stock.id
       };
     });
@@ -133,7 +136,7 @@ export class TradePanel {
     const options = sellableStockIds.map(id => {
       const stock = STOCKS[id];
       const shares = portfolio[id];
-      const price = stock.prices[round];
+      const price = stock.prices[round] ?? 0;
       return {
         label: `${stock.id} - ${stock.name}`,
         description: `持有 ${shares} 股，現價 $${price.toFixed(2)}`,
