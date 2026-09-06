@@ -1,82 +1,260 @@
-# Virtual Stock Exchange Platform (VSE) 
-A real-time Virtual Stock Exchange platform developed for the 20th NYCU IMF Camp. This system provides participants with an immersive, competitive, and technically robust environment to simulate real-market trading.
+﻿# 2026 迎新股市模擬遊戲 Discord Bot (VSE Discord Bot)
 
-**URL** <br> [https://imfvse.vercel.app/](https://imfvse.vercel.app/)
-## 💡Features
-### Real-time Market Simulation
-- Leverages Firebase Firestore to achieve millisecond-level data synchronization, ensuring all participants experience price fluctuations in perfect unison.
-- implements stochastic price movement algorithms to replicate real-world market volatility, adding unpredictability and excitement to trading sessions.
-- Highly optimized frontend architecture to ensure the environment remains responsive even during high-volume trading bursts.
-### Advanced Trading Mechanisms
-- Supports flexible market orders, including both Long (Buy) and Short-selling (Sell) positions, enabling diverse investment strategies.
-- Handles complex calculations in real-time, including:
-  
-  - Automated margin call detection for bankrupt positions.
-  - Dynamic interest rate and borrowing cost accruals.
-  - Real-time buying power calculation based on portfolio valuation and debt levels.
-- Integrated transaction cost algorithms to simulate brokerage fees, borrowing costs, and market slippage, forcing participants to account for expenses.
-### Dynamic Leaderboard & Analytics
-- Automatically computes total asset value and Return on Investment (ROI) across all teams in real-time.
-- Visualizes competitive standings with trend indicators, allowing teams to instantly gauge their position relative to peers.
-### Admin & Oversight System
--  Dedicated administrative dashboard to toggle market status (Open/Close) for specific trading sessions.
--  A notification engine capable of pushing simulated news updates to all participants instantly.
-- Capabilities for admin to adjust:
-  
-  - Inflation system
-  - Service/Lending Fee
-  - Manual Cash Adjust
-  - New Stock info
-###  Responsive UX Design (RWD)
-- Interface crafted for rapid interaction on participants' smartphones, ensuring ease of use during high-pressure trading sessions.
-- Tested across desktop, tablet, and mobile browsers.
-## 🛠️ Tech Stack
-- Frontend: React.js + Vite
-- Backend & Database: Firebase Firestore (Realtime Data Streaming)
-- Authentication: Firebase Authentication (Anonymous Session Management)
-- Styling: Tailwind CSS
-- Deployment: Vercel
-## Local Setup
-### Prerequisites
-- Node.js 
-- npm
-### Steps
-1. Clone the repository
-```bash
-git clone https://github.com/Hu4y/VSE.git
-cd VSE
-```
+專為 **2026 迎新活動** 量身打造的 **Discord 股市模擬交易競賽機器人**。系統完整依據《股市模擬遊戲大綱和市場設定》規則實現，採用純 Discord 互動架構（按鈕選單、彈窗輸入、斜線指令），具備各小隊私密頻道獨立交易、關主總控台與情報發放、本機零依賴持久化儲存，以及競賽懸疑感極佳的嚴格隱私結算機制。
 
-2. Install dependencies
-```bash
-npm install
-```
-3. Set up environment variables
+---
+
+## 💡 遊戲核心規則與市場設定
+
+### 1. 遊戲時程與節奏
+- **總活動時長**：約 140 分鐘。
+- **4 個分期循環**：
+  - **30 分鐘 闖關解題階段 (休市)**：學員依教學內容解題，答對可向關主索取「市場資金」或「指定公司闖關情報」。此階段禁止股票買賣。
+  - **5 分鐘 投資交易階段 (開盤)**：市場開放下單，各小隊在專屬頻道透過交易面板或指令進行買賣，Bot 自動進行 60 秒、30 秒、10 秒倒數廣播警示。
+  - **回合結算 (收盤)**：結算當期資產並於各隊頻道推播專屬戰報。
+
+---
+
+### 2. 八間公司市場行情（固定價格制）
+> 💡 股價依台灣證券交易所 2023–2026 歷年開盤真實數據匿名設定，**固定階梯制**，不會隨學員買賣數量浮動。
+
+| 代碼 | 公司匿名名稱 | 實際公司 | 產業類別 | 第一分期 | 第二分期 | 第三分期 | 第四分期 | 特殊備註 |
+| :---: | :--- | :--- | :--- | :---: | :---: | :---: | :---: | :--- |
+| **T** | T 公司 | 台積電 | 半導體 | $446.00 | $590.00 | $1,070.00 | $1,555.00 | 龍頭成長股 |
+| **M** | M 公司 | 旺宏 | 半導體 | $33.55 | $31.50 | $19.65 | $40.00 | 週期循環反彈 |
+| **F** | F 公司 | 富邦科技 | ETF | $92.00 | $129.40 | $194.35 | $38.09 | 科技成長型 ETF |
+| **B** | B 公司 | 八方雲集 | 觀光餐旅 | $226.00 | $170.50 | $148.00 | $191.00 | 民生外食內需 |
+| **S** | S 公司 | 台鹽 | 食品 | $32.40 | $34.45 | $32.45 | $31.70 | 防禦型民生股 |
+| **D** | D 公司 | 東聯 | 化學 | $18.75 | $20.20 | $14.20 | $12.45 | 傳統原物料工業 |
+| **O** | O 公司 | 一零四 | 數位雲端 | $205.50 | $212.00 | $220.00 | $224.50 | 穩定就業人力市場 |
+| **J** | J 公司 | 京城銀行 | 金融保險 | $33.60 | $39.90 | $50.60 | **$0.00 (已下市)** | ⚠️ **第四期下市殘值歸零** |
+
+> ⚠️ **下市特別警示 (J公司)**：  
+> 京城銀行 (J公司) 於第 4 期標註為「已下市」。第四期開始後**禁止買入**；若小隊在進入第 4 期時仍未出清手中持股，結算時該持股現值將**直接歸零 (變壁紙)**！藉此模擬真實市場的重大變更與下市風險。
+
+---
+
+### 3. 資產與交易規則
+- **計量單位**：以「**股**」為單位（1~N 股皆可自由下單，支援零股交易；1,000 股為 1 張）。
+- **手續費與稅金**：**全免**（純依 `股價 × 股數` 扣除/增加現金，計算清晰透明）。
+- **總資產試算公式**：
+  $$\text{總資產} = \text{現金} + \sum_{i=1}^{8} (\text{持股股數}_i \times \text{當期股價}_i)$$
+- **嚴格隱私結算機制**：
+  - 每期 5 分鐘投資結束後，機器人會**個別發送戰報**至各小隊的專屬私密頻道。
+  - 戰報內容包含：當期股價、該隊目前現金、股票庫存現值、總資產、以及該隊全場名次（例如：第 2 名 / 共 8 隊）。
+  - **其餘隊伍的詳細資產、買賣細節與具體金額一律保密**，維持競爭懸疑感！
+  - 關主可隨時在關主專屬頻道透過大榜查看所有隊伍的即時排行與持股明細。
+
+---
+
+### 4. 市場情報提示系統 (32 則題庫)
+- 內建 4 個分期 × 8 家公司 = 共 **32 則闖關市場提示**（涵蓋情境提示、專家數據、混淆提示）。
+- 提示按分期嚴格管理，關主發放時僅能發放當期的情報，杜絕跨期混淆。
+- 小隊成員可隨時點擊【💡 查看提示】按鈕或輸入 `/hints`，回顧本隊已獲得的所有情報。
+
+---
+
+## 🛠️ 安裝與快速啟動指南
+
+### Step 1. 建立 Discord Bot 並獲取金鑰
+1. 開啟 [Discord Developer Portal](https://discord.com/developers/applications) 並登入。
+2. 點擊右上角 **New Application**，輸入名稱（例如：`2026迎新股市交易所`）。
+3. 進入左側選單 **Bot**：
+   - 點擊 **Reset Token** 並複製 **Token**（此為 `DISCORD_TOKEN`）。
+   - 下滑至 **Privileged Gateway Intents**，開啟 **`MESSAGE CONTENT INTENT`** 並點擊儲存。
+4. 進入左側選單 **OAuth2** -> **URL Generator**：
+   - **Scopes** 勾選：`bot`、`applications.commands`
+   - **Bot Permissions** 勾選：
+     - `Send Messages`（發送訊息）
+     - `Embed Links`（嵌入內容）
+     - `Read Message History`（查看歷史訊息）
+     - `Use Slash Commands`（使用斜線指令）
+   - 複製頁面底部的邀請網址，貼到瀏覽器將 Bot 邀請至您的迎新 Discord 伺服器。
+
+---
+
+### Step 2. 配置環境變數
+在專案根目錄下，複製 `.env.example` 為 `.env`：
 ```bash
 cp .env.example .env
 ```
-Fill in your credentials in `.env` (Firebase)
+使用文字編輯器打開 `.env`，填入對應資料：
+```env
+# Discord 憑證
+DISCORD_TOKEN=你的機器人Token
+CLIENT_ID=你的應用程式ApplicationID
+GUILD_ID=你的Discord伺服器ID (右鍵點擊伺服器圖示 -> 複製伺服器ID)
 
-4. Run the development server
+# 遊戲參數設定
+DEFAULT_INITIAL_CASH=100000
+```
+> 💡 **提示**：提供 `GUILD_ID` 可讓斜線指令在伺服器中「**秒級即時生效**」；若留空則為全域註冊（需等候 5~10 分鐘同步）。
+
+---
+
+### Step 3. 註冊斜線指令
+在終端機中執行：
 ```bash
-npm run dev
+npm run register
+```
+看到 `✅ 成功向伺服器註冊了應用程式指令！` 即代表指令註冊完成。
+
+---
+
+### Step 4. 啟動機器人
+```bash
+npm start
+# 或
+npm run bot
+```
+看到終端機顯示 `🤖 股市模擬機器人已上線！` 即代表運作就緒！
+
+---
+
+## 🎮 營隊現場操作手冊
+
+### 【關主 / 控場幹部流程】
+
+```mermaid
+graph TD
+    A[開場前: /gm setup] --> B[綁定頻道: /gm bind]
+    B --> C[呼叫總控台: /gm panel]
+    C --> D[1. 開始闖關解題 (30分)]
+    D --> E[答對發放: 資金 / 提示]
+    E --> F[2. 開啟 5 分鐘投資交易]
+    F --> G[學員專屬頻道面板買賣 (自動倒數)]
+    G --> H[3. 關閉市場並結算]
+    H --> I{是否為第 4 期?}
+    I -- 否 --> D
+    I -- 是 --> J[全場結算公布總冠軍]
 ```
 
-Open http://localhost:5173 in your browser.
+1. **小隊初始化與頻道綁定**：
+   - 一鍵初始化小隊名冊與起始本金（例如 8 隊，每隊 10 萬）：
+     ```text
+     /gm setup team_count:8 initial_cash:100000
+     ```
+   - 將各隊綁定至專屬私密頻道：
+     ```text
+     /gm bind team_id:team_1 channel:#第1小隊 name:第 1 小隊
+     /gm bind team_id:team_2 channel:#第2小隊 name:第 2 小隊
+     ... (依此類推)
+     ```
+2. **呼叫關主總控台**：
+   - 在關主專屬私密頻道輸入：
+     ```text
+     /gm panel
+     ```
+   - 面板提供 6 大快捷按鈕：
+     - **【🧩 開始本期闖關解題】**：切換為休市狀態，學員專注解題。
+     - **【🟢 開啟 5 分鐘投資交易】**：一鍵開啟市場，全場各隊頻道同步推播「即時交易終端面板」，並啟動 5 分鐘計時器（於 60 秒、30 秒、10 秒自動提醒）。
+     - **【🛑 關閉市場並結算】**：市場關盤，系統自動計算資產與排名，並將各隊專屬戰報個別送達各隊頻道。
+     - **【💵 發放資金獎勵】**：輸入小隊代號與金額，資金立即入帳並於小隊頻道發出恭賀通知。
+     - **【💡 發放市場提示】**：兩層選單挑選「小隊」與「公司」，將當期情報私密推送至該隊。
+     - **【🏆 查看全場總排名】**：隨時開啟全體小隊即時總榜與持倉狀況（僅關主可見）。
 
-## How to Use
-### For Teams
-1. Login: Navigate to the home page, select your designated team from the dropdown, and enter the secret PIN assigned to your team.
-2. Trade: Use the "Market" tab to view live stock charts and place Buy/Sell orders.
-3. Monitor: Use the "Portfolio" tab to track your current holdings, average costs, and total Return on Investment (ROI).
-### For Admins
-1. Access Panel: Click the secret shield icon on the login screen to access the Admin Console.
-2. Market Management: Use the control center to toggle the market status between "Open" and "Closed."
-3. Round Progression: Use the "Advance to Round" button to finalize pricing and apply interest fees at the end of each session.
-4. Broadcast: Use the "News Feed" input to send urgent announcements to all team terminals.
-5. Monitor: Access the "Team Monitor" panel to track real-time asset values, buying power, and individual team trade logs.
-## ⚠️ Security Notice
-- Ensure .env is included in your .gitignore file.
-- When deploying to Vercel, inject your keys via the Environment Variables dashboard in the Vercel settings.
 ---
-This system is developed exclusively for educational purposes for the 20th NYCU IMF Camp. The trading simulations, market data, and financial outcomes generated within this platform are for instructional use only and do not reflect real-world financial advice or market performance.
+
+### 【學員 / 小隊操作流程】
+
+學員僅需在**自己小隊的專屬頻道**操作，完全無需跳出頻道：
+
+1. **圖形化互動面板下單**：
+   - 市場開盤時，頻道會出現【交易終端機】。
+   - **【💰 買入股票】**：下拉選單選取股票代號 -> 彈出視窗輸入股數 -> 立即成交並更新現金與庫存。
+   - **【💸 賣出股票】**：下拉選單選取庫存股票 -> 彈出視窗輸入賣出股數 -> 立即獲利結算。
+   - **【🔄 刷新資訊】**：隨時刷新本隊當期可用現金、持股市值與試算總資產。
+   - **【💡 查看已獲提示】**：彈出本隊迄今解鎖的所有公司情報。
+
+2. **斜線指令快捷下單（手機/電腦皆通用）**：
+   - `/buy stock:T shares:50`：買入 50 股台積電。
+   - `/sell stock:T shares:20`：賣出 20 股台積電。
+   - `/portfolio`：查詢小隊即時持股明細、各檔市值與剩餘現金。
+   - `/hints`：查閱所有已解鎖的市場情報清單。
+   - `/market`：手動呼叫出當期市場行情與互動終端面板。
+
+---
+
+## 📖 指令詳細對照手冊
+
+### 小隊專用指令 (Player Commands)
+
+| 指令 | 說明 | 參數 | 範例 |
+| :--- | :--- | :--- | :--- |
+| `/buy` | 買入指定股票 | `stock` (股票代碼, 必填)<br>`shares` (股數, 必填) | `/buy stock:T shares:100` |
+| `/sell` | 賣出持有的股票 | `stock` (股票代碼, 必填)<br>`shares` (股數, 必填) | `/sell stock:M shares:50` |
+| `/portfolio` | 查看目前持股明細與資產 | 無 | `/portfolio` |
+| `/hints` | 查看已解鎖的所有情報 | 無 | `/hints` |
+| `/market` | 呼叫當期行情看板與交易面板 | 無 | `/market` |
+
+---
+
+### 關主專用指令 (Admin Commands，需伺服器管理員權限)
+
+| 指令 | 說明 | 參數 | 範例 |
+| :--- | :--- | :--- | :--- |
+| `/gm panel` | 召喚關主總控台面板 | 無 | `/gm panel` |
+| `/gm setup` | 初始化小隊名單與初始本金 | `team_count` (隊伍數, 必填)<br>`initial_cash` (起始本金, 選填) | `/gm setup team_count:8 initial_cash:100000` |
+| `/gm bind` | 綁定小隊代號至特定文字頻道 | `team_id` (必填)<br>`channel` (頻道, 必填)<br>`name` (小隊名, 選填) | `/gm bind team_id:team_1 channel:#隊伍1 name:第一小隊` |
+| `/gm round` | 切換當前回合階段 | `stage` (`quiz` / `trading` / `settle`) | `/gm round stage:trading` |
+| `/gm give_cash` | 發放解題獎勵資金給小隊 | `team_id` (必填)<br>`amount` (金額, 必填)<br>`reason` (事由, 選填) | `/gm give_cash team_id:team_1 amount:20000 reason:第一關滿分` |
+| `/gm give_hint` | 發放當期市場提示給小隊 | `team_id` (必填)<br>`stock` (公司代碼, 必填) | `/gm give_hint team_id:team_1 stock:T` |
+| `/gm status` | 檢視全場即時總榜與各隊持倉 | 無 (回覆僅自己可見) | `/gm status` |
+| `/gm broadcast_panels` | 向所有已綁定隊伍頻道推播交易盤 | 無 | `/gm broadcast_panels` |
+| `/gm reset` | 清空整場遊戲紀錄（重設） | `confirm:true` | `/gm reset confirm:true` |
+
+---
+
+## ❓ 常見問題與故障排除 (FAQ)
+
+### Q1: 輸入斜線指令時沒有跳出提示？
+1. 請確認是否執行了 `npm run register`。
+2. 請確認 `.env` 中的 `GUILD_ID` 是否為當前伺服器的 ID。伺服器專屬指令可秒級同步，若未填寫 `GUILD_ID` 則為全域註冊，Discord 需要 5~10 分鐘進行全域同步。
+3. 請檢查 Bot 在該伺服器中是否擁有 `Use Slash Commands`（使用應用程式指令）權限。
+
+### Q2: 關主手殘加錯金額，如何扣回？
+`/gm give_cash` 支援負數金額！若多加了 5,000 元，只需執行：
+```text
+/gm give_cash team_id:team_1 amount:-5000 reason:校正誤發金額
+```
+系統會自動扣除現金（最低為 0）。
+
+### Q3: 機器人重啟或電腦意外斷電，資料會遺失嗎？
+**完全不會！** 本系統內建持久化儲存引擎，每筆交易、資金變更、提示發放與狀態切換皆會即時寫入 `data/gamestate.json`。重新啟動機器人時會自動接續最後的進度。
+
+### Q4: 第四期 J 公司 (京城銀行) 下市到底會發生什麼事？
+在第 4 期：
+- 小隊嘗試執行 `/buy stock:J` 或選取 J 公司買入時，系統會直接拒絕並提示「已下市，無法買入」。
+- 若小隊在第 3 期持有 J 公司且未在第 3 期賣出，在第 4 期的持倉計算中，J 公司現價為 $0.00，市值歸零。
+
+---
+
+## 📁 專案檔案結構
+
+```
+VSE/
+├── bot/                      # Discord Bot 核心程式碼
+│   ├── config/
+│   │   ├── marketData.js     # 8 家公司詳細資料、4 期固定股價、下市設定
+│   │   └── hintsData.js      # 32 則市場提示題庫 (完整收錄企劃)
+│   ├── database/
+│   │   └── storage.js        # 本機持久化 JSON 儲存 (開箱即用、防崩潰重啟)
+│   ├── services/
+│   │   ├── gameEngine.js     # 交易撮合、回合切換、計時倒數、結算與排名演算法
+│   │   └── teamService.js    # 小隊管理、資金異動、情報解鎖
+│   ├── commands/
+│   │   ├── playerCommands.js # 學員斜線指令 (/buy, /sell, /portfolio, /hints, /market)
+│   │   └── adminCommands.js  # 關主斜線指令 (/gm)
+│   ├── components/
+│   │   ├── tradePanel.js     # 小隊交易面板 (Embed + 按鈕 + 彈窗)
+│   │   └── adminPanel.js     # 關主總控台面板
+│   ├── tests/
+│   │   └── gameLogic.test.js # 核心交易與計分單元測試
+│   ├── deploy-commands.js    # 斜線指令自動註冊腳本
+│   └── index.js              # Bot 主入口與互動事件路由
+├── data/                     # 遊戲執行期資料存放區 (gamestate.json)
+├── web/                      # 原有 Vite + React 網頁前端備存
+├── 股市模擬遊戲大綱和市場設定.md # 原始企劃設定說明文件
+├── package.json
+└── README.md                 # 本全方位操作說明文件
+```

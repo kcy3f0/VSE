@@ -4,12 +4,16 @@
   "version": "0.0.0",
   "type": "module",
   "scripts": {
-    "dev": "vite",
-    "build": "vite build",
-    "lint": "eslint .",
-    "preview": "vite preview"
+    "start": "node bot/index.js",
+    "bot": "node bot/index.js",
+    "register": "node bot/deploy-commands.js",
+    "test": "node bot/tests/gameLogic.test.js",
+    "web:dev": "vite web",
+    "web:build": "vite build web"
   },
   "dependencies": {
+    "discord.js": "^14.27.0",
+    "dotenv": "^17.4.2",
     "firebase": "^12.15.0",
     "react": "^19.2.7",
     "react-dom": "^19.2.7"
