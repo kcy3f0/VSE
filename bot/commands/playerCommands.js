@@ -1,9 +1,10 @@
-﻿import { SlashCommandBuilder, EmbedBuilder } from 'discord.js';
+import { SlashCommandBuilder, EmbedBuilder } from 'discord.js';
 import { STOCKS } from '../config/marketData.js';
 import { db } from '../database/storage.js';
 import { GameEngine } from '../services/gameEngine.js';
 import { TeamService } from '../services/teamService.js';
 import { TradePanel } from '../components/tradePanel.js';
+import { teamMutex } from '../utils/security.js';
 
 export const playerSlashCommands = [
   new SlashCommandBuilder()
@@ -89,7 +90,9 @@ export async function handlePlayerCommand(interaction) {
     const type = commandName.toUpperCase();
 
     try {
-      const result = GameEngine.executeTrade(team.id, type, stockId, shares);
+      const result = await teamMutex.runExclusive(team.id, async () => {
+        return GameEngine.executeTrade(team.id, type, stockId, shares);
+      });
       const actionText = type === 'BUY' ? '買入' : '賣出';
       const embed = new EmbedBuilder()
         .setTitle(`✅ 【交易成功】${actionText} ${shares.toLocaleString()} 股 ${result.stock.name}`)

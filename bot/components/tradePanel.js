@@ -1,4 +1,4 @@
-﻿import { EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle, StringSelectMenuBuilder, ModalBuilder, TextInputBuilder, TextInputStyle } from 'discord.js';
+import { EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle, StringSelectMenuBuilder, ModalBuilder, TextInputBuilder, TextInputStyle } from 'discord.js';
 import { STOCKS } from '../config/marketData.js';
 import { TeamService } from '../services/teamService.js';
 import { db } from '../database/storage.js';
@@ -120,12 +120,17 @@ export class TradePanel {
     const team = db.getTeam(teamId);
     const portfolio = team.portfolio || {};
 
-    const holdingStockIds = Object.keys(portfolio).filter(id => portfolio[id] > 0);
-    if (holdingStockIds.length === 0) {
+    // 過濾出尚有持股且當期未下市之股票 (已下市無法賣出，解決 H1)
+    const sellableStockIds = Object.keys(portfolio).filter(id => {
+      const stock = STOCKS[id];
+      return portfolio[id] > 0 && stock && stock.delistedInRound !== round;
+    });
+
+    if (sellableStockIds.length === 0) {
       return null;
     }
 
-    const options = holdingStockIds.map(id => {
+    const options = sellableStockIds.map(id => {
       const stock = STOCKS[id];
       const shares = portfolio[id];
       const price = stock.prices[round];

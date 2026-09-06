@@ -1,4 +1,4 @@
-﻿import { EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle, StringSelectMenuBuilder, ModalBuilder, TextInputBuilder, TextInputStyle } from 'discord.js';
+import { EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle, StringSelectMenuBuilder, ModalBuilder, TextInputBuilder, TextInputStyle } from 'discord.js';
 import { db } from '../database/storage.js';
 import { STOCKS, TOTAL_ROUNDS } from '../config/marketData.js';
 import { TeamService } from '../services/teamService.js';
@@ -100,29 +100,31 @@ export class AdminPanel {
       .setTimestamp();
   }
 
-  // 關主發放資金 Modal
+  // 關主發放或扣除資金 Modal (支援負數校正)
   static buildGiveCashModal() {
     const modal = new ModalBuilder()
       .setCustomId('modal_admin_give_cash')
-      .setTitle('發放闖關解題資金');
+      .setTitle('發放或扣除小隊資金');
 
     const teamInput = new TextInputBuilder()
       .setCustomId('team_id_input')
-      .setLabel('小隊代號 (例如: team_1 或第 1 小隊代碼)')
+      .setLabel('小隊代號 (例如: team_1)')
       .setStyle(TextInputStyle.Short)
+      .setPlaceholder('team_1')
       .setRequired(true);
 
     const amountInput = new TextInputBuilder()
       .setCustomId('amount_input')
-      .setLabel('發放金額 (數字，例如: 10000)')
+      .setLabel('金額 (正數發放，負數扣除校正)')
+      .setPlaceholder('例如: 10000 或 -5000')
       .setStyle(TextInputStyle.Short)
       .setRequired(true);
 
     const reasonInput = new TextInputBuilder()
       .setCustomId('reason_input')
-      .setLabel('事由 (例如: 闖關第 1 題答對獎勵)')
+      .setLabel('事由說明')
       .setStyle(TextInputStyle.Short)
-      .setValue('闖關解題獎勵資金')
+      .setPlaceholder('例如: 第一關答對獎勵 或 校正多發金額')
       .setRequired(false);
 
     modal.addComponents(

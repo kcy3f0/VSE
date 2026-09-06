@@ -1,4 +1,4 @@
-﻿import { SlashCommandBuilder, PermissionFlagsBits, EmbedBuilder } from 'discord.js';
+import { SlashCommandBuilder, PermissionFlagsBits, EmbedBuilder } from 'discord.js';
 import { db } from '../database/storage.js';
 import { STOCKS, TOTAL_ROUNDS } from '../config/marketData.js';
 import { GameEngine } from '../services/gameEngine.js';
@@ -67,7 +67,7 @@ export const adminSlashCommands = [
     )
     .addSubcommand(sub =>
       sub.setName('give_cash')
-        .setDescription('發放解題獎勵資金給小隊')
+        .setDescription('發放或扣除解題資金 (支援負數校正)')
         .addStringOption(opt =>
           opt.setName('team_id')
             .setDescription('小隊代號 (例如: team_1)')
@@ -75,12 +75,12 @@ export const adminSlashCommands = [
         )
         .addIntegerOption(opt =>
           opt.setName('amount')
-            .setDescription('發放金額 (例如: 10000)')
+            .setDescription('發放或扣除金額 (正數發放，負數扣除，例如: 10000 或 -5000)')
             .setRequired(true)
         )
         .addStringOption(opt =>
           opt.setName('reason')
-            .setDescription('發放原因說明')
+            .setDescription('發放或扣除事由說明')
             .setRequired(false)
         )
     )
@@ -175,6 +175,9 @@ export async function handleAdminCommand(interaction, client) {
     }
 
     if (stage === 'trading') {
+      // 避免多頻道廣播逾 3 秒 (H3 防護)
+      await interaction.deferReply();
+
       GameEngine.startTradingStage(
         300,
         async (remainingSec) => {
@@ -183,7 +186,12 @@ export async function handleAdminCommand(interaction, client) {
           for (const t of teams) {
             if (t.channelId) {
               const ch = await client.channels.fetch(t.channelId).catch(() => null);
-              if (ch) ch.send(`⏰ **【投資時間提醒】** 剩餘最後 **${remainingSec}** 秒，請把握時間確認下單！`);
+              if (ch) {
+                await ch.send({
+                  content: `⏰ **【投資時間提醒】** 剩餘最後 **${remainingSec}** 秒，請把握時間確認下單！`,
+                  allowedMentions: { parse: [] }
+                }).catch(console.error);
+              }
             }
           }
         },
@@ -193,7 +201,12 @@ export async function handleAdminCommand(interaction, client) {
           for (const t of teams) {
             if (t.channelId) {
               const ch = await client.channels.fetch(t.channelId).catch(() => null);
-              if (ch) ch.send(`🛑 **【投資時間截止】** 市場已停止交易，請等候關主公布結算結果！`);
+              if (ch) {
+                await ch.send({
+                  content: `🛑 **【投資時間截止】** 市場已停止交易，請等候關主公布結算結果！`,
+                  allowedMentions: { parse: [] }
+                }).catch(console.error);
+              }
             }
           }
         }
@@ -208,18 +221,22 @@ export async function handleAdminCommand(interaction, client) {
             const panel = TradePanel.buildPanel(t.id);
             await ch.send({
               content: `🟢 **【第 ${currentRound} 期 • 5分鐘投資時間開始！】** 市場已開盤，請使用下方按鈕或 \`/buy\`、\`/sell\` 進行交易：`,
-              ...panel
+              ...panel,
+              allowedMentions: { parse: [] }
             }).catch(console.error);
           }
         }
       }
 
-      return interaction.reply({
+      return interaction.editReply({
         content: `🟢 **【第 ${currentRound} 期 • 5 分鐘投資交易階段已開啟！】**\n已向所有綁定的小隊頻道推播交易看板並啟動倒數計時。`
       });
     }
 
     if (stage === 'settle') {
+      // 避免多頻道發送戰報逾 3 秒 (H3 防護)
+      await interaction.deferReply();
+
       const settleResult = GameEngine.settleRound();
       const { round, isLastRound, settlementData } = settleResult;
 
@@ -241,7 +258,10 @@ export async function handleAdminCommand(interaction, client) {
               .setFooter({ text: '依規則：其餘各隊詳細持股與資產不公開。' })
               .setTimestamp();
 
-            await ch.send({ embeds: [embed] }).catch(console.error);
+            await ch.send({
+              embeds: [embed],
+              allowedMentions: { parse: [] }
+            }).catch(console.error);
           }
         }
       }
@@ -253,14 +273,14 @@ export async function handleAdminCommand(interaction, client) {
         replyMsg += `\n下一期為第 **${settleResult.nextRound}** 期。請關主就緒後切換至 QUIZ 階段。`;
       }
 
-      return interaction.reply({ content: replyMsg });
+      return interaction.editReply({ content: replyMsg });
     }
   }
 
   if (subcommand === 'give_cash') {
     const teamId = interaction.options.getString('team_id');
     const amount = interaction.options.getInteger('amount');
-    const reason = interaction.options.getString('reason') || '關主發放闖關解題資金';
+    const reason = interaction.options.getString('reason');
 
     try {
       const result = TeamService.addCash(teamId, amount, reason);
@@ -270,13 +290,22 @@ export async function handleAdminCommand(interaction, client) {
       if (team.channelId) {
         const ch = await client.channels.fetch(team.channelId).catch(() => null);
         if (ch) {
-          ch.send(`🎁 **【獎勵入帳】** 關主已發放資金 **+$${amount.toLocaleString()}**！(事由: ${reason})\n目前現金餘額：**$${result.newCash.toLocaleString()}**`);
+          const notifyMsg = amount >= 0
+            ? `🎁 **【資金入帳】** 關主已發放資金 **+$${amount.toLocaleString()}**！(事由: ${result.reason})\n目前現金餘額：**$${result.newCash.toLocaleString()}**`
+            : `⚠️ **【資金扣除/校正】** 關主扣除資金 **-$${Math.abs(amount).toLocaleString()}**！(事由: ${result.reason})\n目前現金餘額：**$${result.newCash.toLocaleString()}**`;
+
+          await ch.send({
+            content: notifyMsg,
+            allowedMentions: { parse: [] }
+          }).catch(console.error);
         }
       }
 
-      return interaction.reply({
-        content: `✅ 已成功發放 **$${amount.toLocaleString()}** 給 **${team.name}**！目前現金：$${result.newCash.toLocaleString()}`
-      });
+      const replyMsg = amount >= 0
+        ? `✅ 已成功發放 **$${amount.toLocaleString()}** 給 **${team.name}**！目前現金：$${result.newCash.toLocaleString()}`
+        : `✅ 已成功自 **${team.name}** 扣除 **$${Math.abs(amount).toLocaleString()}**！目前現金：$${result.newCash.toLocaleString()}`;
+
+      return interaction.reply({ content: replyMsg });
     } catch (err) {
       return interaction.reply({ content: `❌ ${err.message}`, ephemeral: true });
     }
@@ -302,7 +331,11 @@ export async function handleAdminCommand(interaction, client) {
             .setFooter({ text: '此為貴隊專屬情報，請妥善利用投資策略！' })
             .setTimestamp();
 
-          ch.send({ content: `📬 **【獲得新情報】** 關主發放了市場提示：`, embeds: [embed] });
+          await ch.send({
+            content: `📬 **【獲得新情報】** 關主發放了市場提示：`,
+            embeds: [embed],
+            allowedMentions: { parse: [] }
+          }).catch(console.error);
         }
       }
 
@@ -320,6 +353,7 @@ export async function handleAdminCommand(interaction, client) {
   }
 
   if (subcommand === 'broadcast_panels') {
+    await interaction.deferReply({ ephemeral: true });
     const teams = Object.values(db.getTeams());
     let sentCount = 0;
     for (const t of teams) {
@@ -327,12 +361,12 @@ export async function handleAdminCommand(interaction, client) {
         const ch = await client.channels.fetch(t.channelId).catch(() => null);
         if (ch) {
           const panel = TradePanel.buildPanel(t.id);
-          await ch.send(panel).catch(console.error);
+          await ch.send({ ...panel, allowedMentions: { parse: [] } }).catch(console.error);
           sentCount++;
         }
       }
     }
-    return interaction.reply({ content: `✅ 已向 **${sentCount}** 個小隊頻道發送最新交易看板！` });
+    return interaction.editReply({ content: `✅ 已向 **${sentCount}** 個小隊頻道發送最新交易看板！` });
   }
 
   if (subcommand === 'reset') {

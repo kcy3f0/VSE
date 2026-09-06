@@ -1,4 +1,4 @@
-﻿import fs from 'fs';
+import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { DEFAULT_INITIAL_CASH } from '../config/marketData.js';
@@ -7,6 +7,8 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const DATA_DIR = path.join(__dirname, '../../data');
 const DB_FILE = path.join(DATA_DIR, 'gamestate.json');
+const TMP_FILE = path.join(DATA_DIR, 'gamestate.json.tmp');
+const BAK_FILE = path.join(DATA_DIR, 'gamestate.json.bak');
 
 // 初始預設狀態
 const defaultState = {
@@ -30,26 +32,57 @@ class Storage {
     if (!fs.existsSync(DATA_DIR)) {
       fs.mkdirSync(DATA_DIR, { recursive: true });
     }
+
+    let loaded = false;
+
+    // 嘗試從主要資料庫檔案載入
     if (fs.existsSync(DB_FILE)) {
       try {
         const raw = fs.readFileSync(DB_FILE, 'utf-8');
         this.data = JSON.parse(raw);
         console.log('[Storage] 成功自本地載入遊戲狀態檔。');
+        loaded = true;
       } catch (err) {
-        console.error('[Storage] 載入資料庫失敗，使用預設值：', err);
-        this.save();
+        console.error('[Storage] 主要資料庫損毀或解析失敗：', err.message);
       }
-    } else {
+    }
+
+    // 若主檔損毀，嘗試從備份檔還原
+    if (!loaded && fs.existsSync(BAK_FILE)) {
+      try {
+        const rawBak = fs.readFileSync(BAK_FILE, 'utf-8');
+        this.data = JSON.parse(rawBak);
+        console.log('[Storage] 成功自備份檔 (gamestate.json.bak) 還原遊戲狀態！');
+        loaded = true;
+        this.save();
+      } catch (bakErr) {
+        console.error('[Storage] 備份檔亦無法讀取：', bakErr.message);
+      }
+    }
+
+    if (!loaded) {
       this.save();
       console.log('[Storage] 已建立全新遊戲狀態檔。');
     }
   }
 
+  // 原子化寫入 (Atomic Write)：寫入臨時檔案 -> 備份現有主檔 -> 替換主檔
   save() {
     try {
-      fs.writeFileSync(DB_FILE, JSON.stringify(this.data, null, 2), 'utf-8');
+      const content = JSON.stringify(this.data, null, 2);
+      fs.writeFileSync(TMP_FILE, content, 'utf-8');
+
+      if (fs.existsSync(DB_FILE)) {
+        try {
+          fs.copyFileSync(DB_FILE, BAK_FILE);
+        } catch (copyErr) {
+          console.warn('[Storage] 備份檔案建立失敗：', copyErr.message);
+        }
+      }
+
+      fs.renameSync(TMP_FILE, DB_FILE);
     } catch (err) {
-      console.error('[Storage] 存檔失敗：', err);
+      console.error('[Storage] 原子存檔失敗：', err);
     }
   }
 

@@ -1,4 +1,4 @@
-﻿import { Client, GatewayIntentBits, EmbedBuilder } from 'discord.js';
+import { Client, GatewayIntentBits, EmbedBuilder, PermissionFlagsBits } from 'discord.js';
 import dotenv from 'dotenv';
 import { db } from './database/storage.js';
 import { STOCKS } from './config/marketData.js';
@@ -8,6 +8,7 @@ import { TradePanel } from './components/tradePanel.js';
 import { AdminPanel } from './components/adminPanel.js';
 import { handlePlayerCommand } from './commands/playerCommands.js';
 import { handleAdminCommand } from './commands/adminCommands.js';
+import { teamMutex } from './utils/security.js';
 
 dotenv.config();
 
@@ -26,6 +27,39 @@ client.once('ready', () => {
   console.log(`========================================`);
 });
 
+/**
+ * 檢查互動發起者是否擁有管理員權限 (關主防護 C4)
+ */
+function checkAdminPermission(interaction) {
+  if (!interaction.memberPermissions?.has(PermissionFlagsBits.Administrator)) {
+    interaction.reply({
+      content: '❌ 權限不足：僅有伺服器管理員/關主可操作控制台！',
+      ephemeral: true
+    }).catch(() => {});
+    return false;
+  }
+  return true;
+}
+
+/**
+ * 檢查小隊頻道歸屬與合法性 (小隊防護 C4)
+ */
+function checkTeamChannel(interaction, teamId) {
+  const team = db.getTeam(teamId);
+  if (!team) {
+    interaction.reply({ content: `❌ 找不到指定小隊（代號：${teamId}）！`, ephemeral: true }).catch(() => {});
+    return null;
+  }
+  if (team.channelId && team.channelId !== interaction.channelId) {
+    interaction.reply({
+      content: `❌ 操作被拒絕：您只能在 **${team.name}** 的專屬文字頻道 (<#${team.channelId}>) 進行交易或查看情報！`,
+      ephemeral: true
+    }).catch(() => {});
+    return null;
+  }
+  return team;
+}
+
 // 互動事件監聽 (Slash Commands, Buttons, Menus, Modals)
 client.on('interactionCreate', async (interaction) => {
   try {
@@ -42,9 +76,12 @@ client.on('interactionCreate', async (interaction) => {
     if (interaction.isButton()) {
       const customId = interaction.customId;
 
-      // 小隊交易面板按鈕
+      // --- 小隊交易面板按鈕 (嚴格驗證頻道歸屬 C4) ---
       if (customId.startsWith('trade_open_buy:')) {
         const teamId = customId.split(':')[1];
+        const team = checkTeamChannel(interaction, teamId);
+        if (!team) return;
+
         const selectRow = TradePanel.buildBuyStockSelect(teamId);
         return interaction.reply({
           content: '請從下方選單選擇您要買入的股票代號：',
@@ -55,9 +92,12 @@ client.on('interactionCreate', async (interaction) => {
 
       if (customId.startsWith('trade_open_sell:')) {
         const teamId = customId.split(':')[1];
+        const team = checkTeamChannel(interaction, teamId);
+        if (!team) return;
+
         const selectRow = TradePanel.buildSellStockSelect(teamId);
         if (!selectRow) {
-          return interaction.reply({ content: '您目前沒有持有任何可賣出的股票！', ephemeral: true });
+          return interaction.reply({ content: '您目前沒有持有任何可賣出的股票！（若為第四期已下市股票則無法賣出）', ephemeral: true });
         }
         return interaction.reply({
           content: '請從下方選單選擇您要賣出的股票代號：',
@@ -68,13 +108,18 @@ client.on('interactionCreate', async (interaction) => {
 
       if (customId.startsWith('trade_refresh:')) {
         const teamId = customId.split(':')[1];
+        const team = checkTeamChannel(interaction, teamId);
+        if (!team) return;
+
         const panel = TradePanel.buildPanel(teamId);
         return interaction.update(panel);
       }
 
       if (customId.startsWith('trade_hints:')) {
         const teamId = customId.split(':')[1];
-        const team = db.getTeam(teamId);
+        const team = checkTeamChannel(interaction, teamId);
+        if (!team) return;
+
         const hints = TeamService.getUnlockedHints(teamId);
         if (hints.length === 0) {
           return interaction.reply({
@@ -89,7 +134,11 @@ client.on('interactionCreate', async (interaction) => {
         return interaction.reply({ embeds: [embed], ephemeral: true });
       }
 
-      // 關主控制台按鈕
+      // --- 關主控制台按鈕 (嚴格驗證關主身分 C4) ---
+      if (customId.startsWith('admin_btn_')) {
+        if (!checkAdminPermission(interaction)) return;
+      }
+
       if (customId === 'admin_btn_start_quiz') {
         const currentRound = db.getGameState().round;
         GameEngine.startQuizStage(currentRound);
@@ -100,6 +149,9 @@ client.on('interactionCreate', async (interaction) => {
       }
 
       if (customId === 'admin_btn_start_trading') {
+        // 延遲響應防止多頻道推播超過 3 秒 (H3 防護)
+        await interaction.deferReply({ ephemeral: true });
+
         const currentRound = db.getGameState().round;
         GameEngine.startTradingStage(
           300,
@@ -108,7 +160,12 @@ client.on('interactionCreate', async (interaction) => {
             for (const t of teams) {
               if (t.channelId) {
                 const ch = await client.channels.fetch(t.channelId).catch(() => null);
-                if (ch) ch.send(`⏰ **【投資時間提醒】** 剩餘最後 **${remainingSec}** 秒！`);
+                if (ch) {
+                  await ch.send({
+                    content: `⏰ **【投資時間提醒】** 剩餘最後 **${remainingSec}** 秒！`,
+                    allowedMentions: { parse: [] }
+                  }).catch(console.error);
+                }
               }
             }
           },
@@ -117,7 +174,12 @@ client.on('interactionCreate', async (interaction) => {
             for (const t of teams) {
               if (t.channelId) {
                 const ch = await client.channels.fetch(t.channelId).catch(() => null);
-                if (ch) ch.send(`🛑 **【投資時間截止】** 市場已停止交易，等候結算！`);
+                if (ch) {
+                  await ch.send({
+                    content: `🛑 **【投資時間截止】** 市場已停止交易，等候結算！`,
+                    allowedMentions: { parse: [] }
+                  }).catch(console.error);
+                }
               }
             }
           }
@@ -132,19 +194,22 @@ client.on('interactionCreate', async (interaction) => {
               const panel = TradePanel.buildPanel(t.id);
               await ch.send({
                 content: `🟢 **【第 ${currentRound} 期 • 5分鐘投資時間開始！】**`,
-                ...panel
+                ...panel,
+                allowedMentions: { parse: [] }
               }).catch(console.error);
             }
           }
         }
 
-        return interaction.reply({
-          content: `🟢 **【第 ${currentRound} 期 • 5 分鐘投資交易已開啟！】** 已推播至各隊頻道並啟動倒數。`,
-          ephemeral: true
+        return interaction.editReply({
+          content: `🟢 **【第 ${currentRound} 期 • 5 分鐘投資交易已開啟！】** 已推播至各隊頻道並啟動倒數。`
         });
       }
 
       if (customId === 'admin_btn_settle') {
+        // 延遲響應防止多隊戰報發送逾時 (H3 防護)
+        await interaction.deferReply({ ephemeral: true });
+
         const settleResult = GameEngine.settleRound();
         const { round, isLastRound, settlementData } = settleResult;
 
@@ -163,14 +228,13 @@ client.on('interactionCreate', async (interaction) => {
                 )
                 .setFooter({ text: '依規則：其餘各隊詳細資產不公開。' })
                 .setTimestamp();
-              await ch.send({ embeds: [embed] }).catch(console.error);
+              await ch.send({ embeds: [embed], allowedMentions: { parse: [] } }).catch(console.error);
             }
           }
         }
 
-        return interaction.reply({
-          content: `🏁 **【第 ${round} 期結算完畢】**！已私密發送成績至各隊頻道。${isLastRound ? '（全 4 期完結）' : ''}`,
-          ephemeral: true
+        return interaction.editReply({
+          content: `🏁 **【第 ${round} 期結算完畢】**！已私密發送成績至各隊頻道。${isLastRound ? '（全 4 期完結）' : ''}`
         });
       }
 
@@ -180,6 +244,14 @@ client.on('interactionCreate', async (interaction) => {
       }
 
       if (customId === 'admin_btn_give_hint') {
+        const gameState = db.getGameState();
+        if (gameState.stage !== 'QUIZ') {
+          return interaction.reply({
+            content: '⚠️ 依規則，市場提示僅能在「闖關解題階段 (QUIZ)」發放！目前階段為 ' + gameState.stage,
+            ephemeral: true
+          });
+        }
+
         const teamSelectRow = AdminPanel.buildSelectTeamForHint();
         if (!teamSelectRow) {
           return interaction.reply({ content: '尚未建立任何小隊！請先執行 `/gm setup`。', ephemeral: true });
@@ -201,24 +273,32 @@ client.on('interactionCreate', async (interaction) => {
     if (interaction.isStringSelectMenu()) {
       const customId = interaction.customId;
 
-      // 小隊選好買入股票
+      // 小隊選好買入股票 (驗證頻道歸屬 C4)
       if (customId.startsWith('select_buy_stock:')) {
         const teamId = customId.split(':')[1];
+        const team = checkTeamChannel(interaction, teamId);
+        if (!team) return;
+
         const stockId = interaction.values[0];
         const modal = TradePanel.buildTradeModal('BUY', stockId, teamId);
         return interaction.showModal(modal);
       }
 
-      // 小隊選好賣出股票
+      // 小隊選好賣出股票 (驗證頻道歸屬 C4)
       if (customId.startsWith('select_sell_stock:')) {
         const teamId = customId.split(':')[1];
+        const team = checkTeamChannel(interaction, teamId);
+        if (!team) return;
+
         const stockId = interaction.values[0];
         const modal = TradePanel.buildTradeModal('SELL', stockId, teamId);
         return interaction.showModal(modal);
       }
 
-      // 關主發放提示：第一步選好小隊
+      // 關主發放提示選單 (驗證關主身分 C4)
       if (customId === 'admin_select_team_hint') {
+        if (!checkAdminPermission(interaction)) return;
+
         const teamId = interaction.values[0];
         const team = db.getTeam(teamId);
         const stockSelectRow = AdminPanel.buildSelectStockForHint(teamId);
@@ -228,30 +308,40 @@ client.on('interactionCreate', async (interaction) => {
         });
       }
 
-      // 關主發放提示：第二步選好公司
       if (customId === 'admin_select_stock_hint') {
+        if (!checkAdminPermission(interaction)) return;
+
         const [teamId, stockId] = interaction.values[0].split(':');
         const round = db.getGameState().round;
-        const result = TeamService.unlockHint(teamId, round, stockId);
-        const team = db.getTeam(teamId);
 
-        if (team.channelId) {
-          const ch = await client.channels.fetch(team.channelId).catch(() => null);
-          if (ch) {
-            const embed = new EmbedBuilder()
-              .setTitle(`💡 【獲得市場情報】第 ${round} 期 • ${result.stock.name}`)
-              .setColor(0xf39c12)
-              .setDescription(result.hint.content)
-              .setFooter({ text: '此為貴隊專屬情報，請妥善規劃投資策略！' })
-              .setTimestamp();
-            ch.send({ content: '📬 **【獲得新情報】** 關主發送了市場提示：', embeds: [embed] });
+        try {
+          const result = TeamService.unlockHint(teamId, round, stockId);
+          const team = db.getTeam(teamId);
+
+          if (team.channelId) {
+            const ch = await client.channels.fetch(team.channelId).catch(() => null);
+            if (ch) {
+              const embed = new EmbedBuilder()
+                .setTitle(`💡 【獲得市場情報】第 ${round} 期 • ${result.stock.name}`)
+                .setColor(0xf39c12)
+                .setDescription(result.hint.content)
+                .setFooter({ text: '此為貴隊專屬情報，請妥善規劃投資策略！' })
+                .setTimestamp();
+              await ch.send({
+                content: '📬 **【獲得新情報】** 關主發送了市場提示：',
+                embeds: [embed],
+                allowedMentions: { parse: [] }
+              });
+            }
           }
-        }
 
-        return interaction.update({
-          content: `✅ 已成功發放第 **${round}** 期 **${result.stock.name}** 提示給 **${team.name}**！`,
-          components: []
-        });
+          return interaction.update({
+            content: `✅ 已成功發放第 **${round}** 期 **${result.stock.name}** 提示給 **${team.name}**！`,
+            components: []
+          });
+        } catch (err) {
+          return interaction.reply({ content: `❌ ${err.message}`, ephemeral: true });
+        }
       }
     }
 
@@ -259,9 +349,12 @@ client.on('interactionCreate', async (interaction) => {
     if (interaction.isModalSubmit()) {
       const customId = interaction.customId;
 
-      // 小隊交易 Modal
+      // 小隊交易 Modal (驗證頻道歸屬 C4 與互斥鎖 C3)
       if (customId.startsWith('modal_trade:')) {
         const [, type, stockId, teamId] = customId.split(':');
+        const team = checkTeamChannel(interaction, teamId);
+        if (!team) return;
+
         const sharesRaw = interaction.fields.getTextInputValue('shares_input').trim();
         const shares = parseInt(sharesRaw, 10);
 
@@ -270,7 +363,11 @@ client.on('interactionCreate', async (interaction) => {
         }
 
         try {
-          const result = GameEngine.executeTrade(teamId, type, stockId, shares);
+          // 使用 teamMutex 鎖定隊伍並發撮合 (解決 C3)
+          const result = await teamMutex.runExclusive(teamId, async () => {
+            return GameEngine.executeTrade(teamId, type, stockId, shares);
+          });
+
           const actionText = type === 'BUY' ? '買入' : '賣出';
           const embed = new EmbedBuilder()
             .setTitle(`✅ 【交易成功】${actionText} ${shares.toLocaleString()} 股 ${result.stock.name}`)
@@ -289,32 +386,47 @@ client.on('interactionCreate', async (interaction) => {
         }
       }
 
-      // 關主發放現金 Modal
+      // 關主發放或扣除現金 Modal (驗證管理員權限 C4、支援負數 C1、防呆 H2)
       if (customId === 'modal_admin_give_cash') {
+        if (!checkAdminPermission(interaction)) return;
+
         const teamId = interaction.fields.getTextInputValue('team_id_input').trim();
         const amountRaw = interaction.fields.getTextInputValue('amount_input').trim();
-        const reason = interaction.fields.getTextInputValue('reason_input').trim() || '關主發放資金';
+        const reason = interaction.fields.getTextInputValue('reason_input').trim();
         const amount = parseInt(amountRaw, 10);
 
-        if (isNaN(amount) || amount <= 0) {
-          return interaction.reply({ content: '❌ 發放金額必須為大於 0 的整數！', ephemeral: true });
+        if (isNaN(amount) || amount === 0) {
+          return interaction.reply({
+            content: '❌ 發放或扣除金額必須為不為 0 的有效整數！(例如: 10000 或 -5000)',
+            ephemeral: true
+          });
         }
 
         try {
-          const result = TeamService.addCash(teamId, amount, reason);
+          const result = await teamMutex.runExclusive(teamId, async () => {
+            return TeamService.addCash(teamId, amount, reason);
+          });
           const team = result.team;
 
           if (team.channelId) {
             const ch = await client.channels.fetch(team.channelId).catch(() => null);
             if (ch) {
-              ch.send(`🎁 **【獎勵入帳】** 關主發放資金 **+$${amount.toLocaleString()}**！(事由: ${reason})\n目前現金餘額：**$${result.newCash.toLocaleString()}**`);
+              const notifyMsg = amount >= 0
+                ? `🎁 **【資金入帳】** 關主發放資金 **+$${amount.toLocaleString()}**！(事由: ${result.reason})\n目前現金餘額：**$${result.newCash.toLocaleString()}**`
+                : `⚠️ **【資金扣除/校正】** 關主扣除資金 **-$${Math.abs(amount).toLocaleString()}**！(事由: ${result.reason})\n目前現金餘額：**$${result.newCash.toLocaleString()}**`;
+
+              await ch.send({
+                content: notifyMsg,
+                allowedMentions: { parse: [] }
+              }).catch(console.error);
             }
           }
 
-          return interaction.reply({
-            content: `✅ 已成功發放 **$${amount.toLocaleString()}** 給 **${team.name}**！目前該隊現金：$${result.newCash.toLocaleString()}`,
-            ephemeral: true
-          });
+          const replyMsg = amount >= 0
+            ? `✅ 已成功發放 **$${amount.toLocaleString()}** 給 **${team.name}**！目前該隊現金：$${result.newCash.toLocaleString()}`
+            : `✅ 已成功自 **${team.name}** 扣除 **$${Math.abs(amount).toLocaleString()}**！目前該隊現金：$${result.newCash.toLocaleString()}`;
+
+          return interaction.reply({ content: replyMsg, ephemeral: true });
         } catch (err) {
           return interaction.reply({ content: `❌ ${err.message}`, ephemeral: true });
         }

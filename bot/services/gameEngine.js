@@ -1,4 +1,4 @@
-﻿import { db } from '../database/storage.js';
+import { db } from '../database/storage.js';
 import { STOCKS, TOTAL_ROUNDS, DEFAULT_TRADING_DURATION_SECONDS } from '../config/marketData.js';
 import { TeamService } from './teamService.js';
 
@@ -12,6 +12,11 @@ export class GameEngine {
       throw new Error('目前非投資交易階段，市場已關閉！請在 5 分鐘投資時間內進行下單。');
     }
 
+    // 檢查是否已逾 5 分鐘投資時間
+    if (gameState.tradingEndsAt && Date.now() > gameState.tradingEndsAt) {
+      throw new Error('【交易截止】5 分鐘投資交易時間已截止，市場關閉等候結算！');
+    }
+
     const team = db.getTeam(teamId);
     if (!team) throw new Error(`找不到小隊：${teamId}`);
 
@@ -21,11 +26,9 @@ export class GameEngine {
     const round = gameState.round;
     const currentPrice = stock.prices[round];
 
-    // 第四期下市處理
+    // 第四期下市處理 (H1: 禁止買入與賣出)
     if (stock.delistedInRound === round) {
-      if (type === 'BUY') {
-        throw new Error(`【交易失敗】${stock.name} 在本期已下市，無法買入！`);
-      }
+      throw new Error(`【交易失敗】${stock.name} 在本期已下市，股票現值已歸零且無法進行任何買賣！`);
     }
 
     if (!Number.isInteger(shares) || shares <= 0) {
@@ -128,14 +131,23 @@ export class GameEngine {
       this.timer = null;
     }
 
+    const currentRound = currentState.round;
     const endsAt = Date.now() + durationSeconds * 1000;
     db.updateGameState({
       stage: 'TRADING',
       tradingEndsAt: endsAt
     });
 
-    // 啟動倒數檢查器
+    // 啟動倒數檢查器 (綁定當前期數與狀態，解決 C5)
     this.timer = setInterval(() => {
+      const state = db.getGameState();
+      // 若已非交易階段或回合已被切換，立即終止計時器
+      if (state.stage !== 'TRADING' || state.round !== currentRound) {
+        clearInterval(this.timer);
+        this.timer = null;
+        return;
+      }
+
       const remainingMs = endsAt - Date.now();
       const remainingSec = Math.ceil(remainingMs / 1000);
 
